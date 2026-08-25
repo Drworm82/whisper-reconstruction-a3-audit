@@ -133,6 +133,36 @@ function Reconstruct-WhisperWindows {
 
         if ($null -eq $match) {
             Write-Host "SIN MATCH"
+            
+            # Mantener finalWords existente y añadir la ventana actual como continuación
+            # en lugar de reiniciar perdiendo el historial
+            $currentWords = @(
+                Build-WhisperWords $current.Tokens -WindowIndex $i
+            )
+            
+            # Construir previousOverlapMap para currentWords basado en currOverlap
+            $previousOverlapMap = @{}
+            for ($k = 0; $k -lt $currOverlap.Count; $k++) {
+                $word = $currOverlap[$k]
+                $foundIndex = -1
+                for ($idx = 0; $idx -lt $currentWords.Count; $idx++) {
+                    if ($currentWords[$idx].Id -eq $word.Id) {
+                        $foundIndex = $idx
+                        break
+                    }
+                }
+                if ($foundIndex -ne -1) {
+                    $previousOverlapMap[$word.Id] = $foundIndex
+                }
+            }
+            
+            # AÑADIR la ventana actual como continuación a finalWords
+            # en lugar de continuar sin perder nada
+            for ($w = 0; $w -lt $currentWords.Count; $w++) {
+                $finalWords += $currentWords[$w]
+            }
+            
+            # Continuar reconstrucción desde este punto sin perder finalWords anterior
             continue
         }
 

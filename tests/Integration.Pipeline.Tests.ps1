@@ -2,7 +2,7 @@ $projectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Pa
 . "$projectRoot\whisper-reconstruction.ps1"
 . "$projectRoot\src\Pipeline\Invoke-WhisperReconstruction.ps1"
 
-$fixturePath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'fixtures\whisperx-test.json'
+$fixturePath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'fixtures\whisperx-long-test.json'
 
 if (-not (Test-Path -LiteralPath $fixturePath)) {
     Write-Error "Fixture not found: $fixturePath"
