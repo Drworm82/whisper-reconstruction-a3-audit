@@ -1,0 +1,92 @@
+[
+  {
+    "Start": 0.0,
+    "End": 8.0,
+    "Tokens": [
+      { "Text": " ", "From": 0.0, "To": 0.25 },
+      { "Text": "Esta", "From": 0.25, "To": 1.0 },
+      { "Text": " ", "From": 1.0, "To": 1.25 },
+      { "Text": "es", "From": 1.25, "To": 2.0 },
+      { "Text": " ", "From": 2.0, "To": 2.25 },
+      { "Text": "una", "From": 2.25, "To": 3.0 },
+      { "Text": " ", "From": 3.0, "To": 3.25 },
+      { "Text": "prueba", "From": 3.25, "To": 4.0 },
+      { "Text": " ", "From": 4.0, "To": 4.25 },
+      { "Text": "de", "From": 4.25, "To": 5.0 },
+      { "Text": " ", "From": 5.0, "To": 5.25 },
+      { "Text": "reconstrucción", "From": 5.25, "To": 6.0 },
+      { "Text": " ", "From": 6.0, "To": 6.25 },
+      { "Text": "de", "From": 6.25, "To": 7.0 },
+      { "Text": " ", "From": 7.0, "To": 7.25 },
+      { "Text": "Whisper", "From": 7.25, "To": 8.0 }
+    ]
+  },
+  {
+    "Start": 4.0,
+    "End": 12.0,
+    "Tokens": [
+      { "Text": " ", "From": 4.0, "To": 4.25 },
+      { "Text": "de", "From": 4.25, "To": 5.0 },
+      { "Text": " ", "From": 5.0, "To": 5.25 },
+      { "Text": "reconstrucción", "From": 5.25, "To": 6.0 },
+      { "Text": " ", "From": 6.0, "To": 6.25 },
+      { "Text": "de", "From": 6.25, "To": 7.0 },
+      { "Text": " ", "From": 7.0, "To": 7.25 },
+      { "Text": "Whisper", "From": 7.25, "To": 8.0 },
+      { "Text": " ", "From": 8.0, "To": 8.25 },
+      { "Text": "donde", "From": 8.25, "To": 9.0 },
+      { "Text": " ", "From": 9.0, "To": 9.25 },
+      { "Text": "algunas", "From": 9.25, "To": 10.0 },
+      { "Text": " ", "From": 10.0, "To": 10.25 },
+      { "Text": "palabras", "From": 10.25, "To": 11.0 },
+      { "Text": " ", "From": 11.0, "To": 11.25 },
+      { "Text": "aparecen", "From": 11.25, "To": 12.0 }
+    ]
+  },
+  {
+    "Start": 8.0,
+    "End": 16.0,
+    "Tokens": [
+      { "Text": " ", "From": 8.0, "To": 8.25 },
+      { "Text": "donde", "From": 8.25, "To": 9.0 },
+      { "Text": " ", "From": 9.0, "To": 9.25 },
+      { "Text": "algunas", "From": 9.25, "To": 10.0 },
+      { "Text": " ", "From": 10.0, "To": 10.25 },
+      { "Text": "palabras", "From": 10.25, "To": 11.0 },
+      { "Text": " ", "From": 11.0, "To": 11.25 },
+      { "Text": "aparecen", "From": 11.25, "To": 12.0 },
+      { "Text": " ", "From": 12.0, "To": 12.25 },
+      { "Text": "repetidas", "From": 12.25, "To": 13.0 },
+      { "Text": " ", "From": 13.0, "To": 13.25 },
+      { "Text": "entre", "From": 13.25, "To": 14.0 },
+      { "Text": " ", "From": 14.0, "To": 14.25 },
+      { "Text": "ventanas", "From": 14.25, "To": 15.0 },
+      { "Text": " ", "From": 15.0, "To": 15.25 },
+      { "Text": "y", "From": 15.25, "To": 16.0 }
+    ]
+  },
+  {
+    "Start": 12.0,
+    "End": 21.0,
+    "Tokens": [
+      { "Text": " ", "From": 12.0, "To": 12.25 },
+      { "Text": "repetidas", "From": 12.25, "To": 13.0 },
+      { "Text": " ", "From": 13.0, "To": 13.25 },
+      { "Text": "entre", "From": 13.25, "To": 14.0 },
+      { "Text": " ", "From": 14.0, "To": 14.25 },
+      { "Text": "ventanas", "From": 14.25, "To": 15.0 },
+      { "Text": " ", "From": 15.0, "To": 15.25 },
+      { "Text": "y", "From": 15.25, "To": 16.0 },
+      { "Text": " ", "From": 16.0, "To": 16.25 },
+      { "Text": "esta", "From": 16.25, "To": 17.0 },
+      { "Text": " ", "From": 17.0, "To": 17.25 },
+      { "Text": "es", "From": 17.25, "To": 18.0 },
+      { "Text": " ", "From": 18.0, "To": 18.25 },
+      { "Text": "la", "From": 18.25, "To": 19.0 },
+      { "Text": " ", "From": 19.0, "To": 19.25 },
+      { "Text": "prueba", "From": 19.25, "To": 20.0 },
+      { "Text": " ", "From": 20.0, "To": 20.25 },
+      { "Text": "final", "From": 20.25, "To": 21.0 }
+    ]
+  }
+]

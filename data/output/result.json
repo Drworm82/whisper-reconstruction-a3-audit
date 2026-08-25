@@ -1,0 +1,296 @@
+﻿[
+    {
+        "Text":  "Esta",
+        "Key":  "esta",
+        "From":  0.25,
+        "To":  1.0,
+        "Tokens":  [
+                       {
+                           "Text":  "Esta",
+                           "From":  0.25,
+                           "To":  1.0
+                       }
+                   ],
+        "Id":  "0-0"
+    },
+    {
+        "Text":  "es",
+        "Key":  "es",
+        "From":  1.25,
+        "To":  2.0,
+        "Tokens":  [
+                       {
+                           "Text":  "es",
+                           "From":  1.25,
+                           "To":  2.0
+                       }
+                   ],
+        "Id":  "0-1"
+    },
+    {
+        "Text":  "una",
+        "Key":  "una",
+        "From":  2.25,
+        "To":  3.0,
+        "Tokens":  [
+                       {
+                           "Text":  "una",
+                           "From":  2.25,
+                           "To":  3.0
+                       }
+                   ],
+        "Id":  "0-2"
+    },
+    {
+        "Text":  "prueba",
+        "Key":  "prueba",
+        "From":  3.25,
+        "To":  4.0,
+        "Tokens":  [
+                       {
+                           "Text":  "prueba",
+                           "From":  3.25,
+                           "To":  4.0
+                       }
+                   ],
+        "Id":  "0-3"
+    },
+    {
+        "Text":  "de",
+        "Key":  "de",
+        "From":  4.25,
+        "To":  5.0,
+        "Tokens":  [
+                       {
+                           "Text":  "de",
+                           "From":  4.25,
+                           "To":  5.0
+                       }
+                   ],
+        "Id":  "1-0"
+    },
+    {
+        "Text":  "reconstrucciÃ³n",
+        "Key":  "reconstrucciã³n",
+        "From":  5.25,
+        "To":  6.0,
+        "Tokens":  [
+                       {
+                           "Text":  "reconstrucciÃ³n",
+                           "From":  5.25,
+                           "To":  6.0
+                       }
+                   ],
+        "Id":  "1-1"
+    },
+    {
+        "Text":  "de",
+        "Key":  "de",
+        "From":  6.25,
+        "To":  7.0,
+        "Tokens":  [
+                       {
+                           "Text":  "de",
+                           "From":  6.25,
+                           "To":  7.0
+                       }
+                   ],
+        "Id":  "1-2"
+    },
+    {
+        "Text":  "Whisper",
+        "Key":  "whisper",
+        "From":  7.25,
+        "To":  8.0,
+        "Tokens":  [
+                       {
+                           "Text":  "Whisper",
+                           "From":  7.25,
+                           "To":  8.0
+                       }
+                   ],
+        "Id":  "1-3"
+    },
+    {
+        "Text":  "donde",
+        "Key":  "donde",
+        "From":  8.25,
+        "To":  9.0,
+        "Tokens":  [
+                       {
+                           "Text":  "donde",
+                           "From":  8.25,
+                           "To":  9.0
+                       }
+                   ],
+        "Id":  "2-0"
+    },
+    {
+        "Text":  "algunas",
+        "Key":  "algunas",
+        "From":  9.25,
+        "To":  10.0,
+        "Tokens":  [
+                       {
+                           "Text":  "algunas",
+                           "From":  9.25,
+                           "To":  10.0
+                       }
+                   ],
+        "Id":  "2-1"
+    },
+    {
+        "Text":  "palabras",
+        "Key":  "palabras",
+        "From":  10.25,
+        "To":  11.0,
+        "Tokens":  [
+                       {
+                           "Text":  "palabras",
+                           "From":  10.25,
+                           "To":  11.0
+                       }
+                   ],
+        "Id":  "2-2"
+    },
+    {
+        "Text":  "aparecen",
+        "Key":  "aparecen",
+        "From":  11.25,
+        "To":  12.0,
+        "Tokens":  [
+                       {
+                           "Text":  "aparecen",
+                           "From":  11.25,
+                           "To":  12.0
+                       }
+                   ],
+        "Id":  "2-3"
+    },
+    {
+        "Text":  "repetidas",
+        "Key":  "repetidas",
+        "From":  12.25,
+        "To":  13.0,
+        "Tokens":  [
+                       {
+                           "Text":  "repetidas",
+                           "From":  12.25,
+                           "To":  13.0
+                       }
+                   ],
+        "Id":  "3-0"
+    },
+    {
+        "Text":  "entre",
+        "Key":  "entre",
+        "From":  13.25,
+        "To":  14.0,
+        "Tokens":  [
+                       {
+                           "Text":  "entre",
+                           "From":  13.25,
+                           "To":  14.0
+                       }
+                   ],
+        "Id":  "3-1"
+    },
+    {
+        "Text":  "ventanas",
+        "Key":  "ventanas",
+        "From":  14.25,
+        "To":  15.0,
+        "Tokens":  [
+                       {
+                           "Text":  "ventanas",
+                           "From":  14.25,
+                           "To":  15.0
+                       }
+                   ],
+        "Id":  "3-2"
+    },
+    {
+        "Text":  "y",
+        "Key":  "y",
+        "From":  15.25,
+        "To":  16.0,
+        "Tokens":  [
+                       {
+                           "Text":  "y",
+                           "From":  15.25,
+                           "To":  16.0
+                       }
+                   ],
+        "Id":  "3-3"
+    },
+    {
+        "Text":  "esta",
+        "Key":  "esta",
+        "From":  16.25,
+        "To":  17.0,
+        "Tokens":  [
+                       {
+                           "Text":  "esta",
+                           "From":  16.25,
+                           "To":  17.0
+                       }
+                   ],
+        "Id":  "3-4"
+    },
+    {
+        "Text":  "es",
+        "Key":  "es",
+        "From":  17.25,
+        "To":  18.0,
+        "Tokens":  [
+                       {
+                           "Text":  "es",
+                           "From":  17.25,
+                           "To":  18.0
+                       }
+                   ],
+        "Id":  "3-5"
+    },
+    {
+        "Text":  "la",
+        "Key":  "la",
+        "From":  18.25,
+        "To":  19.0,
+        "Tokens":  [
+                       {
+                           "Text":  "la",
+                           "From":  18.25,
+                           "To":  19.0
+                       }
+                   ],
+        "Id":  "3-6"
+    },
+    {
+        "Text":  "prueba",
+        "Key":  "prueba",
+        "From":  19.25,
+        "To":  20.0,
+        "Tokens":  [
+                       {
+                           "Text":  "prueba",
+                           "From":  19.25,
+                           "To":  20.0
+                       }
+                   ],
+        "Id":  "3-7"
+    },
+    {
+        "Text":  "final",
+        "Key":  "final",
+        "From":  20.25,
+        "To":  21.0,
+        "Tokens":  [
+                       {
+                           "Text":  "final",
+                           "From":  20.25,
+                           "To":  21.0
+                       }
+                   ],
+        "Id":  "3-8"
+    }
+]
