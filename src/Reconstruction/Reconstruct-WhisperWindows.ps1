@@ -134,35 +134,85 @@ function Reconstruct-WhisperWindows {
         if ($null -eq $match) {
             Write-Host "SIN MATCH"
             
-            # Mantener finalWords existente y añadir la ventana actual como continuación
-            # en lugar de reiniciar perdiendo el historial
+            # Helper: Test if a word already exists based on text and timing
+            function Test-WordAlreadyExists {
+                param(
+                    [object]$newWord,
+                    [object[]]$existingWords
+                )
+                
+                foreach ($existing in $existingWords) {
+                    # Normalize text comparison (case-insensitive, trim)
+                    $newTextNormalized = ($newWord.Text.ToLower()).Trim()
+                    $existingTextNormalized = ($existing.Text.ToLower()).Trim()
+                    
+                    if ($newTextNormalized -eq $existingTextNormalized) {
+                        # Check timing differences
+                        $fromDiff = [math]::Abs($newWord.From - $existing.From)
+                        $toDiff = [math]::Abs($newWord.To - $existing.To)
+                        
+                        if ($fromDiff -le 0.5 -and $toDiff -le 0.5) {
+                            return $true
+                        }
+                    }
+                }
+                
+                return $false
+            }
+            
+            # Helper: Add new words avoiding duplicates based on text and timing
+            function Add-NewWordsWithTiming {
+                param(
+                    [object[]]$currentWords,
+                    [object[]]$finalWords
+                )
+                
+                $result = @($finalWords)
+                
+                foreach ($word in $currentWords) {
+                    if (-not (Test-WordAlreadyExists $word $result)) {
+                        $result += $word
+                    }
+                }
+                
+                return $result
+            }
+            
+            # Helper: Build previousOverlapMap for currentWords based on currOverlap
+            function Build-PreviousOverlapMap {
+                param(
+                    [object[]]$currOverlap,
+                    [object[]]$currentWords
+                )
+                
+                $previousOverlapMap = @{}
+                foreach ($word in $currOverlap) {
+                    $foundIndex = -1
+                    for ($idx = 0; $idx -lt $currentWords.Count; $idx++) {
+                        if ($currentWords[$idx].Id -eq $word.Id) {
+                            $foundIndex = $idx
+                            break
+                        }
+                    }
+                    if ($foundIndex -ne -1) {
+                        $previousOverlapMap[$word.Id] = $foundIndex
+                    }
+                }
+                return $previousOverlapMap
+            }
+            
+            # Get currentWords for the current window
             $currentWords = @(
                 Build-WhisperWords $current.Tokens -WindowIndex $i
             )
             
-            # Construir previousOverlapMap para currentWords basado en currOverlap
-            $previousOverlapMap = @{}
-            for ($k = 0; $k -lt $currOverlap.Count; $k++) {
-                $word = $currOverlap[$k]
-                $foundIndex = -1
-                for ($idx = 0; $idx -lt $currentWords.Count; $idx++) {
-                    if ($currentWords[$idx].Id -eq $word.Id) {
-                        $foundIndex = $idx
-                        break
-                    }
-                }
-                if ($foundIndex -ne -1) {
-                    $previousOverlapMap[$word.Id] = $foundIndex
-                }
-            }
+            # Build previousOverlapMap for currentWords based on currOverlap
+            $previousOverlapMap = Build-PreviousOverlapMap $currOverlap $currentWords
             
-            # AÑADIR la ventana actual como continuación a finalWords
-            # en lugar de continuar sin perder nada
-            for ($w = 0; $w -lt $currentWords.Count; $w++) {
-                $finalWords += $currentWords[$w]
-            }
+            # Add words based on text and timing deduplication
+            $finalWords = Add-NewWordsWithTiming $currentWords $finalWords
             
-            # Continuar reconstrucción desde este punto sin perder finalWords anterior
+            # Continue reconstruction from this point without losing history
             continue
         }
 
