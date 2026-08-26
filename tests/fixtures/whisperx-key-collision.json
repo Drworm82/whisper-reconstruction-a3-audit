@@ -1,0 +1,26 @@
+{
+  "Segments": [
+    {
+      "Start": 0.0,
+      "End": 10.0,
+      "Words": [
+        { "Word": "cómo", "Start": 0.1, "End": 0.4 },
+        { "Word": "estas", "Start": 0.5, "End": 0.8 },
+        { "Word": "hoy", "Start": 0.9, "End": 1.2 },
+        { "Word": "como", "Start": 1.3, "End": 1.6 },
+        { "Word": "siempre", "Start": 1.7, "End": 2.0 }
+      ]
+    },
+    {
+      "Start": 6.0,
+      "End": 16.0,
+      "Words": [
+        { "Word": "como", "Start": 6.1, "End": 6.4 },
+        { "Word": "ayer", "Start": 6.5, "End": 6.8 },
+        { "Word": "cómo", "Start": 6.9, "End": 7.2 },
+        { "Word": "antes", "Start": 7.3, "End": 7.6 },
+        { "Word": "siempre", "Start": 7.7, "End": 8.0 }
+      ]
+    }
+  ]
+}

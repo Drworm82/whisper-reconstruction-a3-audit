@@ -1,0 +1,50 @@
+{
+  "Segments": [
+    {
+      "Start": 0.0,
+      "End": 15.0,
+      "Words": [
+        { "Word": "Hola", "Start": 0.1, "End": 0.4 },
+        { "Word": "y", "Start": 0.5, "End": 0.6 },
+        { "Word": "bienvenidos", "Start": 0.7, "End": 1.0 },
+        { "Word": "a", "Start": 1.1, "End": 1.2 },
+        { "Word": "la", "Start": 1.3, "End": 1.4 },
+        { "Word": "charla", "Start": 1.5, "End": 1.8 },
+        { "Word": "de", "Start": 1.9, "End": 2.0 },
+        { "Word": "hoy", "Start": 2.1, "End": 2.4 },
+        { "Word": "y", "Start": 2.5, "End": 2.6 },
+        { "Word": "mañana", "Start": 2.7, "End": 3.0 },
+        { "Word": "la", "Start": 3.1, "End": 3.2 },
+        { "Word": "semana", "Start": 3.3, "End": 3.6 },
+        { "Word": "que", "Start": 3.7, "End": 3.8 },
+        { "Word": "viene", "Start": 3.9, "End": 4.2 },
+        { "Word": "de", "Start": 4.3, "End": 4.4 },
+        { "Word": "nuevo", "Start": 4.5, "End": 4.8 },
+        { "Word": "y", "Start": 4.9, "End": 5.0 },
+        { "Word": "la", "Start": 5.1, "End": 5.2 },
+        { "Word": "siguiente", "Start": 5.3, "End": 5.6 }
+      ]
+    },
+    {
+      "Start": 10.0,
+      "End": 25.0,
+      "Words": [
+        { "Word": "nuevo", "Start": 10.1, "End": 10.4 },
+        { "Word": "y", "Start": 10.5, "End": 10.6 },
+        { "Word": "la", "Start": 10.7, "End": 10.8 },
+        { "Word": "siguiente", "Start": 10.9, "End": 11.2 },
+        { "Word": "semana", "Start": 11.3, "End": 11.6 },
+        { "Word": "y", "Start": 11.7, "End": 11.8 },
+        { "Word": "la", "Start": 11.9, "End": 12.0 },
+        { "Word": "otra", "Start": 12.1, "End": 12.4 },
+        { "Word": "y", "Start": 12.5, "End": 12.6 },
+        { "Word": "de", "Start": 12.7, "End": 12.8 },
+        { "Word": "nuevo", "Start": 12.9, "End": 13.2 },
+        { "Word": "temas", "Start": 13.3, "End": 13.6 },
+        { "Word": "y", "Start": 13.7, "End": 13.8 },
+        { "Word": "la", "Start": 13.9, "End": 14.0 },
+        { "Word": "final", "Start": 14.1, "End": 14.4 }
+      ]
+    }
+  ]
+}
