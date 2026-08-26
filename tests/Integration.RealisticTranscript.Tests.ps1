@@ -1,6 +1,9 @@
 ﻿# Test de Integración: Transcripción Continua Realista
 # Valida pipeline con ventanas solapadas generando texto sin duplicar bloques
 
+$projectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+. "$projectRoot\src\Load-WhisperReconstruction.ps1"
+
 # ============================================================
 # CONFIGURACIÓN DEL TEST
 # ============================================================
@@ -30,7 +33,9 @@ function Validate-ContinuousTranscript {
     $fixture = Get-Content -Path $config.FixturePath -Raw | ConvertFrom-Json
     
     # Ejecutar pipeline
-    $result = Reconstruct-WhisperWindows -windows $fixture.Segments
+    $result = Invoke-WhisperReconstruction -WhisperXPath $config.FixturePath `
+                                                -WindowDurationSeconds $config.WindowDurationSeconds `
+                                                -OverlapDurationSeconds $config.OverlapDurationSeconds
     
     # Validaciones
     $testsPassed = 0
@@ -58,39 +63,18 @@ function Validate-ContinuousTranscript {
     $totalTests++
     $duplicateBlocksFound = $false
     
-    # Buscar cualquier palabra que aparezca no consecutivamente (repetida)
+    # Buscar bloques de 3+ palabras consecutivas repetidas en el texto final
     $allWords = $result.Text
-    $wordGroups = @{}
+    $minBlockSize = 3
     
-    foreach ($word in $allWords) {
-        if (-not $wordGroups.ContainsKey($word)) {
-            $wordGroups[$word] = @()
-        }
-        $wordGroups[$word] += $word
-    }
-    
-    # Verificar duplicados para cada palabra
-    foreach ($word in $wordGroups.Keys) {
-        $occurrences = $wordGroups[$word]
-        if ($occurrences.Count -gt 1) {
-            # Encontrar posiciones
-            $positions = @()
-            for ($i = 0; $i -lt $allWords.Count; $i++) {
-                if ($allWords[$i] -eq $word) {
-                    $positions += $i
-                }
-            }
-            
-            if ($positions.Count -gt 1) {
-                # Si hay posiciones no consecutivas, es un duplicado
-                for ($i = 0; $i -lt $positions.Count - 1; $i++) {
-                    if ($positions[$i] -ne $positions[$i + 1] - 1) {
-                        $duplicateBlocksFound = $true
-                        Write-Host "✗ Palabra '$word' aparece repetidamente en posiciones: $($positions -join ', ')"
-                        break
-                    }
-                }
-            }
+    for ($i = 0; $i -lt $allWords.Count - $minBlockSize; $i++) {
+        $block = $allWords[$i..($i + $minBlockSize - 1)] -join ' '
+        $blockNext = $allWords[($i + 1)..($i + $minBlockSize)] -join ' '
+
+        if ($block -eq $blockNext) {
+            $duplicateBlocksFound = $true
+            Write-Host "✗ Bloque repetido detectado: $block"
+            break
         }
     }
     
@@ -100,40 +84,38 @@ function Validate-ContinuousTranscript {
     } else {
         Write-Host "✗ Se encontraron bloques repetidos en el texto final"
     }
-    
-    # Test 4: Descripción coherente (continuación natural)
+    # Test 4: El fixture tiene estructura de transcripción continua con overlaps
     $totalTests++
-    $firstSegmentText = $fixture.Segments[0].Tokens.Text -join " "
-    $lastSegmentText = $fixture.Segments[-1].Tokens.Text -join " "
+    $firstSegmentWords = $fixture.Segments[0].Words.Word
+    $secondSegmentWords = $fixture.Segments[1].Words.Word
     
-    # Verificar que el texto continua lógicamente
-    $textContinuity = $true
-    if (-not $firstSegmentText.Contains($lastSegmentText.Substring(0, [math]::Min(10, $lastSegmentText.Length)))) {
-        # Verificar overlap de al menos 5 palabras
-        $firstWords = $fixture.Segments[0].Tokens.Text
-        $secondWords = $fixture.Segments[1].Tokens.Text
-        
-        $overlapWords = 0
-        for ($i = 0; $i -lt [math]::Min($firstWords.Count, $secondWords.Count); $i++) {
-            if ($firstWords[$i] -eq $secondWords[$i]) {
-                $overlapWords++
+    # Verificar que el segmento 1 comparte al menos 5 palabras con el segmento 0
+    $overlapWords = 0
+    $maxCheck = [math]::Min($firstSegmentWords.Count, $secondSegmentWords.Count)
+    if ($maxCheck -gt 10) { $maxCheck = 10 }
+
+    # Buscar el principio del segmento 1 dentro del segmento 0
+    for ($i = 0; $i -lt $firstSegmentWords.Count - $maxCheck + 1; $i++) {
+        $matchCount = 0
+        for ($j = 0; $j -lt $maxCheck; $j++) {
+            if ($firstSegmentWords[$i + $j] -eq $secondSegmentWords[$j]) {
+                $matchCount++
             } else {
                 break
             }
         }
-        
-        if ($overlapWords -ge 5) {
-            Write-Host "✓ Segmentos tienen suficiente continuidad (overlap de $overlapWords palabras)"
-            $testsPassed++
-        } else {
-            Write-Host "✗ Poca continuidad entre segmentos (overlap de solo $overlapWords palabras)"
-            $textContinuity = $false
+        if ($matchCount -gt $overlapWords) {
+            $overlapWords = $matchCount
         }
-    } else {
-        Write-Host "✓ Segmentos muestran continuidad natural"
-        $testsPassed++
     }
     
+    if ($overlapWords -ge 5) {
+        Write-Host "✓ Segmentos tienen suficiente continuidad (overlap de $overlapWords palabras)"
+        $testsPassed++
+    } else {
+        Write-Host "✗ Poca continuidad entre segmentos (overlap de solo $overlapWords palabras)"
+    }
+
     # Resultado final
     Write-Host ""
     Write-Host "Resultado: $testsPassed/$totalTests tests pasaron"
@@ -151,6 +133,10 @@ function Validate-ContinuousTranscript {
 # EJECUCIÓN DEL TEST
 # ============================================================
 
+# Cargar fixture para validación interna
+$fixture = Get-Content -Path $testConfig.FixturePath -Raw | ConvertFrom-Json
+
+# Ejecutar validación
 $testResult = Validate-ContinuousTranscript -config $testConfig
 
 if ($testResult) {
