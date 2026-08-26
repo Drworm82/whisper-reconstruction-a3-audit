@@ -177,41 +177,16 @@ function Reconstruct-WhisperWindows {
                 
                 return $result
             }
-            
-            # Helper: Build previousOverlapMap for currentWords based on currOverlap
-            function Build-PreviousOverlapMap {
-                param(
-                    [object[]]$currOverlap,
-                    [object[]]$currentWords
-                )
-                
-                $previousOverlapMap = @{}
-                foreach ($word in $currOverlap) {
-                    $foundIndex = -1
-                    for ($idx = 0; $idx -lt $currentWords.Count; $idx++) {
-                        if ($currentWords[$idx].Id -eq $word.Id) {
-                            $foundIndex = $idx
-                            break
-                        }
-                    }
-                    if ($foundIndex -ne -1) {
-                        $previousOverlapMap[$word.Id] = $foundIndex
-                    }
-                }
-                return $previousOverlapMap
-            }
-            
-            # Get currentWords for the current window
-            $currentWords = @(
-                Build-WhisperWords $current.Tokens -WindowIndex $i
-            )
-            
-            # Build previousOverlapMap for currentWords based on currOverlap
-            $previousOverlapMap = Build-PreviousOverlapMap $currOverlap $currentWords
-            
+
             # Add words based on text and timing deduplication
             $finalWords = Add-NewWordsWithTiming $currentWords $finalWords
-            
+
+            # Build previousOverlapMap for all words in finalWords using their absolute index
+            $previousOverlapMap = @{}
+            for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
+                $previousOverlapMap[$finalWords[$idx].Id] = $idx
+            }
+
             # Continue reconstruction from this point without losing history
             continue
         }

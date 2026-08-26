@@ -1,165 +1,215 @@
-# PRUEBA 2 — SIN MATCH -> MATCH
-# Verifica que después de un SIN MATCH la siguiente transición puede volver a producir MATCH
-# sin "ERROR: EL ELEMENTO DEL MATCH NO TIENE MAPA"
+# PRUEBA 2 — REGRESION: MATCH -> SIN MATCH -> MATCH
+# Verifica que el estado de reconstrucción (previousOverlapMap / prefixCount)
+# se preserve correctamente a través de la secuencia MATCH -> SIN MATCH -> MATCH,
+# sin truncar el historial previo ni duplicar palabras.
 
 $projectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 . "$projectRoot\src\Load-WhisperReconstruction.ps1"
 
-$fixturePath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'fixtures\whisperx-match-sinmatch-match.json'
+$pass = $true
 
-if (-not (Test-Path -LiteralPath $fixturePath)) {
-    Write-Error "Fixture not found: $fixturePath"
-    exit 1
+Write-Host "=== PRUEBA 2: REGRESION MATCH -> SIN MATCH -> MATCH ==="
+
+function New-TestToken {
+    param([string]$Text, [double]$From, [double]$To)
+    [PSCustomObject]@{
+        Text = $Text
+        From = $From
+        To   = $To
+    }
 }
 
-Write-Host "=== PRUEBA 2: SIN MATCH -> MATCH ==="
-Write-Host "Fixture: $fixturePath"
-Write-Host "WindowDurationSeconds: 10"
-Write-Host "OverlapDurationSeconds: 4"
-Write-Host ""
+# Configuración de 4 ventanas para forzar:
+# Transición 1 (W0 -> W1): MATCH en 'cinco seis siete ocho'
+# Transición 2 (W1 -> W2): SIN MATCH (W1 tiene 'nueve diez once doce', W2 tiene 'palabraA palabraB palabraC')
+# Transición 3 (W2 -> W3): MATCH en 'palabraA palabraB palabraC alpha beta gamma'
 
-# Ejecutar pipeline y capturar salida completa
-$output = @()
-$sb = [System.Text.StringBuilder]::new()
-
-try {
-    $result = Invoke-WhisperReconstruction -WhisperXPath $fixturePath `
-                                           -WindowDurationSeconds 10 `
-                                           -OverlapDurationSeconds 4
-    Write-Host "[OK] Pipeline completado sin excepcion"
-} catch {
-    Write-Host "[FAIL] Pipeline threw exception: $_"
-    exit 1
+$w0 = [PSCustomObject]@{
+    Start = 0.0
+    End   = 10.0
+    Tokens = @(
+        New-TestToken 'uno' 0.1 0.9
+        New-TestToken ' dos' 1.1 1.9
+        New-TestToken ' tres' 2.1 2.9
+        New-TestToken ' cuatro' 3.1 3.9
+        New-TestToken ' cinco' 6.1 6.9
+        New-TestToken ' seis' 7.1 7.9
+        New-TestToken ' siete' 8.1 8.9
+        New-TestToken ' ocho' 9.1 9.9
+    )
 }
 
-$wordsArray = @($result)
-
-if ($wordsArray.Count -eq 0) {
-    Write-Host "[FAIL] Resultado vacio"
-    exit 1
+$w1 = [PSCustomObject]@{
+    Start = 5.0
+    End   = 15.0
+    Tokens = @(
+        New-TestToken 'cinco' 6.1 6.9
+        New-TestToken ' seis' 7.1 7.9
+        New-TestToken ' siete' 8.1 8.9
+        New-TestToken ' ocho' 9.1 9.9
+        New-TestToken ' nueve' 10.1 10.9
+        New-TestToken ' diez' 11.1 11.9
+        New-TestToken ' once' 12.1 12.9
+        New-TestToken ' doce' 13.1 13.9
+    )
 }
 
-Write-Host "[OK] Resultado contiene $($wordsArray.Count) palabras"
+$w2 = [PSCustomObject]@{
+    Start = 13.5
+    End   = 20.0
+    Tokens = @(
+        New-TestToken 'palabraA' 14.1 14.9
+        New-TestToken ' palabraB' 15.1 15.9
+        New-TestToken ' palabraC' 16.1 16.9
+        New-TestToken ' alpha' 17.1 17.9
+        New-TestToken ' beta' 18.1 18.9
+        New-TestToken ' gamma' 19.1 19.9
+    )
+}
 
-# Re-ejecutar para capturar la salida de consola (Write-Host del pipeline)
-# Usamos PowerShell para capturar stdout
-$cmd = "cd '$projectRoot'; . .\src\Load-WhisperReconstruction.ps1; Invoke-WhisperReconstruction -WhisperXPath '.\tests\fixtures\whisperx-match-sinmatch-match.json' -WindowDurationSeconds 10 -OverlapDurationSeconds 4"
-$processOutput = powershell -NoProfile -ExecutionPolicy Bypass -Command $cmd 2>&1
+$w3 = [PSCustomObject]@{
+    Start = 14.0
+    End   = 24.0
+    Tokens = @(
+        New-TestToken 'palabraA' 14.1 14.9
+        New-TestToken ' palabraB' 15.1 15.9
+        New-TestToken ' palabraC' 16.1 16.9
+        New-TestToken ' alpha' 17.1 17.9
+        New-TestToken ' beta' 18.1 18.9
+        New-TestToken ' gamma' 19.1 19.9
+        New-TestToken ' delta' 20.1 20.9
+        New-TestToken ' epsilon' 21.1 21.9
+    )
+}
 
-# Analizar salida para detectar secuencia MATCH/SIN MATCH
+$windows = @($w0, $w1, $w2, $w3)
+
+$transcriptPath = Join-Path $env:TEMP ("whisper-regress-" + [Guid]::NewGuid().ToString() + ".txt")
+Start-Transcript -Path $transcriptPath | Out-Null
+
+$result = Reconstruct-WhisperWindows $windows
+
+Stop-Transcript | Out-Null
+
+$diagnostics = Get-Content -LiteralPath $transcriptPath -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $transcriptPath -Force -ErrorAction SilentlyContinue
+
+# 1. Verificar secuencia de transiciones
 $transitions = @()
 $currentTransition = $null
 
-foreach ($line in $processOutput) {
+foreach ($line in $diagnostics) {
     if ($line -match "TRANSICION\s+([\d.]+)s\s+->\s+([\d.]+)s") {
         if ($currentTransition) { $transitions += $currentTransition }
         $currentTransition = @{
             From = $matches[1]
             To = $matches[2]
             Type = "UNKNOWN"
-            HasErrorNoMap = $false
+            PrefixCount = -1
         }
     } elseif ($line -match "SIN MATCH") {
         if ($currentTransition) { $currentTransition.Type = "SIN_MATCH" }
     } elseif ($line -match "PreviousStart\s+:\s+\d+") {
         if ($currentTransition) { $currentTransition.Type = "MATCH" }
-    } elseif ($line -match "ERROR: EL ELEMENTO DEL MATCH NO TIENE MAPA") {
-        if ($currentTransition) { $currentTransition.HasErrorNoMap = $true }
+    } elseif ($line -match "PrefixCount\s+:\s+(\d+)") {
+        if ($currentTransition) { $currentTransition.PrefixCount = [int]$matches[1] }
     }
 }
 if ($currentTransition) { $transitions += $currentTransition }
 
-Write-Host "Transiciones detectadas: $($transitions.Count)"
-foreach ($t in $transitions) {
-    $errMsg = ""
-    if ($t.HasErrorNoMap) { $errMsg = " (ERROR NO MAPA)" }
-    Write-Host "  $($t.From)s -> $($t.To)s : $($t.Type)$errMsg"
+Write-Host "Transiciones evaluadas: $($transitions.Count)"
+for ($t = 0; $t -lt $transitions.Count; $t++) {
+    Write-Host "  Transicion $t ($($transitions[$t].From)s -> $($transitions[$t].To)s): $($transitions[$t].Type) (PrefixCount=$($transitions[$t].PrefixCount))"
 }
 
-# Verificar secuencia: MATCH -> SIN MATCH -> MATCH
-$hasMatchBefore = $false
-$hasSinMatch = $false
-$hasMatchAfter = $false
-$errorNoMap = $false
+if ($transitions.Count -ne 3) {
+    Write-Host "[FAIL] Se esperaban 3 transiciones, se obtuvieron $($transitions.Count)"
+    $pass = $false
+} else {
+    if ($transitions[0].Type -ne "MATCH") {
+        Write-Host "[FAIL] Transicion 0 debia ser MATCH, fue $($transitions[0].Type)"
+        $pass = $false
+    } else {
+        Write-Host "[OK] Transicion 0: MATCH"
+    }
 
-foreach ($t in $transitions) {
-    if ($t.Type -eq "MATCH" -and -not $hasSinMatch) {
-        $hasMatchBefore = $true
+    if ($transitions[1].Type -ne "SIN_MATCH") {
+        Write-Host "[FAIL] Transicion 1 debia ser SIN_MATCH, fue $($transitions[1].Type)"
+        $pass = $false
+    } else {
+        Write-Host "[OK] Transicion 1: SIN_MATCH"
     }
-    if ($t.Type -eq "SIN_MATCH") {
-        $hasSinMatch = $true
+
+    if ($transitions[2].Type -ne "MATCH") {
+        Write-Host "[FAIL] Transicion 2 debia ser MATCH, fue $($transitions[2].Type)"
+        $pass = $false
+    } else {
+        Write-Host "[OK] Transicion 2: MATCH"
     }
-    if ($t.Type -eq "MATCH" -and $hasSinMatch) {
-        $hasMatchAfter = $true
+}
+
+# 2. Verificar contenido exacto y que no se trunco el prefijo
+$expectedWords = @(
+    "uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez", "once", "doce",
+    "palabraA", "palabraB", "palabraC", "alpha", "beta", "gamma",
+    "delta", "epsilon"
+)
+$expectedText = $expectedWords -join ' '
+
+$actualWords = @($result | ForEach-Object { $_.Text })
+$actualText = $actualWords -join ' '
+
+Write-Host ""
+Write-Host "Verificacion de contenido:"
+Write-Host "Esperado ($($expectedWords.Count) palabras): $expectedText"
+Write-Host "Obtenido ($($actualWords.Count) palabras): $actualText"
+
+if ($actualWords.Count -ne $expectedWords.Count) {
+    Write-Host "[FAIL] Conteo de palabras incorrecto: esperado $($expectedWords.Count), obtenido $($actualWords.Count)"
+    $pass = $false
+} else {
+    Write-Host "[OK] Conteo de palabras: $($actualWords.Count)"
+}
+
+if ($actualText -ne $expectedText) {
+    Write-Host "[FAIL] Texto reconstruido no coincide exactamente con el esperado"
+    $pass = $false
+} else {
+    Write-Host "[OK] Texto reconstruido coincide exactamente con el esperado"
+}
+
+# 3. Verificar que las palabras previas al SIN MATCH (W0 y W1) estan completas
+$earlyExpected = @("uno", "dos", "tres", "cuatro", "cinco", "seis", "siete", "ocho", "nueve", "diez", "once", "doce")
+$missingEarly = @()
+foreach ($w in $earlyExpected) {
+    if ($actualWords -notcontains $w) {
+        $missingEarly += $w
     }
-    if ($t.HasErrorNoMap) {
-        $errorNoMap = $true
+}
+
+if ($missingEarly.Count -gt 0) {
+    Write-Host "[FAIL] Se perdieron palabras previas al SIN MATCH: $($missingEarly -join ', ')"
+    $pass = $false
+} else {
+    Write-Host "[OK] Todas las palabras previas al SIN MATCH estan presentes"
+}
+
+# 4. Verificar orden temporal ascendente
+$orderOk = $true
+for ($i = 1; $i -lt $result.Count; $i++) {
+    if ($result[$i].From -lt $result[$i - 1].From) {
+        Write-Host ("[FAIL] Violacion de orden temporal en indice {0}: {1} ({2}) < {3} ({4})" -f $i, $result[$i].Text, $result[$i].From, $result[$i - 1].Text, $result[$i - 1].From)
+        $orderOk = $false
+        $pass = $false
+        break
     }
+}
+if ($orderOk) {
+    Write-Host "[OK] Orden temporal monótonamente creciente"
 }
 
 Write-Host ""
-Write-Host "Verificaciones:"
-
-if ($hasMatchBefore) {
-    Write-Host "[OK] Hubo al menos un MATCH antes del SIN MATCH"
-} else {
-    Write-Host "[FAIL] No hubo MATCH antes del SIN MATCH"
-}
-
-if ($hasSinMatch) {
-    Write-Host "[OK] Hubo al menos un SIN MATCH"
-} else {
-    Write-Host "[FAIL] No hubo SIN MATCH"
-}
-
-if ($hasMatchAfter) {
-    Write-Host "[OK] Hubo al menos un MATCH despues del SIN MATCH"
-} else {
-    Write-Host "[FAIL] No hubo MATCH despues del SIN MATCH"
-}
-
-if ($errorNoMap) {
-    Write-Host "[FAIL] Aparecio 'ERROR: EL ELEMENTO DEL MATCH NO TIENE MAPA'"
-} else {
-    Write-Host "[OK] No aparecio 'ERROR: EL ELEMENTO DEL MATCH NO TIENE MAPA'"
-}
-
-# Verificar zonas temporales
-$hasZone1 = $false  # 0-10s
-$hasZone2 = $false  # 6-12s (seg2)
-$hasZone3 = $false  # 16-22s (seg3)
-$hasZone4 = $false  # 18-28s (seg4)
-
-foreach ($w in $wordsArray) {
-    if ($w.From -ge 0 -and $w.To -le 11) { $hasZone1 = $true }
-    if ($w.From -ge 5 -and $w.To -le 13) { $hasZone2 = $true }
-    if ($w.From -ge 15 -and $w.To -le 23) { $hasZone3 = $true }
-    if ($w.From -ge 17 -and $w.To -le 29) { $hasZone4 = $true }
-}
-
-if ($hasZone1) { Write-Host "[OK] Zona 0-10s presente" } else { Write-Host "[FAIL] Falta zona 0-10s" }
-if ($hasZone2) { Write-Host "[OK] Zona 6-12s presente" } else { Write-Host "[FAIL] Falta zona 6-12s" }
-if ($hasZone3) { Write-Host "[OK] Zona 16-22s presente" } else { Write-Host "[FAIL] Falta zona 16-22s" }
-if ($hasZone4) { Write-Host "[OK] Zona 18-28s presente" } else { Write-Host "[FAIL] Falta zona 18-28s" }
-
-if (-not $hasZone1 -or -not $hasZone2 -or -not $hasZone3 -or -not $hasZone4) {
-    Write-Host "[FAIL] No se conservaron todas las zonas relevantes"
-}
-
-# Verificar que no se perdió historial anterior al SIN MATCH
-# El SIN MATCH ocurre en transición 6.1->12.1 (W1->W2)
-# Las palabras de W0 (0-10s) y W1 (6-16s) deben estar en el resultado
-$earlyWords = $wordsArray | Where-Object { $_.From -lt 12 }
-if ($earlyWords.Count -gt 0) {
-    Write-Host "[OK] Historial anterior al SIN MATCH conservado ($($earlyWords.Count) palabras con From < 12s)"
-} else {
-    Write-Host "[FAIL] Se perdio historial anterior al SIN MATCH"
-}
-
-$allPassed = $hasMatchBefore -and $hasSinMatch -and $hasMatchAfter -and (-not $errorNoMap) -and $hasZone1 -and $hasZone2 -and $hasZone3 -and $hasZone4 -and ($earlyWords.Count -gt 0)
-
-Write-Host ""
-if ($allPassed) {
+if ($pass) {
     Write-Host "=== PRUEBA 2 PASSED ==="
     exit 0
 } else {
