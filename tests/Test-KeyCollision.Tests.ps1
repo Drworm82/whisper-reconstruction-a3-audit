@@ -137,14 +137,18 @@ for ($segIdx = 0; $segIdx -lt $fixture.Segments.Count; $segIdx++) {
 Write-Host ("Ocurrencias en fixture: {0}" -f $fixtureComo.Count)
 Write-Host ("Ocurrencias en resultado: {0}" -f $finalComo.Count)
 
+$bugDetected = $false
+
 if ($fixtureComo.Count -gt $finalComo.Count) {
     $lost = $fixtureComo.Count - $finalComo.Count
-    Write-Host ("[WARN] Se perdieron {0} ocurrencias con Key 'como' en el pipeline" -f $lost)
+    Write-Host ("[FAIL] Se perdieron {0} ocurrencias con Key 'como' en el pipeline" -f $lost)
     Write-Host "       Posibles causas: windowing (fuera de rango), deduplicacion, Find-WordOverlap, u otra etapa"
+    $bugDetected = $true
 } elseif ($fixtureComo.Count -eq $finalComo.Count) {
     Write-Host "[OK] Todas las ocurrencias del fixture llegaron al resultado"
 } else {
-    Write-Host "[INFO] Hay mas ocurrencias en resultado que en fixture (inesperado)"
+    Write-Host "[FAIL] Hay mas ocurrencias en resultado que en fixture (inesperado, posible duplicacion espuria)"
+    $bugDetected = $true
 }
 
 # 6. Verificar orden temporal
@@ -157,7 +161,11 @@ foreach ($w in $finalComo) {
     }
     $prevFrom = $w.From
 }
-if ($orderOk) { Write-Host "[OK] Orden temporal correcto en Key 'como'" }
+if ($orderOk) {
+    Write-Host "[OK] Orden temporal correcto en Key 'como'"
+} else {
+    $bugDetected = $true
+}
 
 # 7. Verificar bloques repetidos
 $allText = $wordsArray.Text
@@ -171,10 +179,17 @@ for ($i = 0; $i -le $allText.Count - $minBlockSize; $i++) {
         $duplicateBlocks = $true
     }
 }
-if (-not $duplicateBlocks) { Write-Host "[OK] No hay bloques repetidos" }
+if (-not $duplicateBlocks) {
+    Write-Host "[OK] No hay bloques repetidos"
+} else {
+    $bugDetected = $true
+}
 
 Write-Host ""
-Write-Host "=== DIAGNOSTICO KEY COLLISION COMPLETADO ==="
-Write-Host "Nota: Este test reporta diagnostico; no declara PASS/FAIL automaticamente."
-Write-Host "Revisar la salida para determinar si la colision causa bug real."
-exit 0
+if ($bugDetected) {
+    Write-Host "=== PRUEBA 4 FAILED: colision de Key 'como'/'cómo' causa perdida, desorden o duplicacion ==="
+    exit 1
+} else {
+    Write-Host "=== PRUEBA 4 PASSED: la colision de Key no causa efectos observables en este fixture ==="
+    exit 0
+}

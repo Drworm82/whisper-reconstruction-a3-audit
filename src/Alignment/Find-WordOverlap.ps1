@@ -1,9 +1,12 @@
-# ============================================================
+﻿# ============================================================
 # Find-WordOverlap
 # ============================================================
-function Find-WordOverlap {
-    param($previousWords, $currentWords)
 
+function Find-WordOverlap {
+    param(
+        $previousWords,
+        $currentWords
+    )
 
     $best = $null
 
@@ -29,7 +32,6 @@ function Find-WordOverlap {
                 ) {
 
                     $matches++
-
                     $pi++
                     $cj++
 
@@ -71,12 +73,13 @@ function Find-WordOverlap {
                 break
             }
 
-            if ($matches -lt 3) {
+            # Umbral mínimo real: 5 coincidencias.
+            if ($matches -lt 5) {
                 continue
             }
 
             # ----------------------------------------------------
-            # Medir la calidad temporal del match
+            # Métricas del candidato
             # ----------------------------------------------------
 
             $startPrevious = $previousWords[$i].From
@@ -100,6 +103,17 @@ function Find-WordOverlap {
                     $durationCurrent
                 )
 
+            $previousConsumed = $pi - $i
+            $currentConsumed  = $cj - $j
+
+            # ¿El tramo coincidente llega hasta el final
+            # del overlap recibido?
+            $reachesPreviousEnd =
+                ($pi -ge $previousWords.Count)
+
+            $reachesCurrentEnd =
+                ($cj -ge $currentWords.Count)
+
             $candidate = [PSCustomObject]@{
 
                 Matches = $matches
@@ -111,16 +125,28 @@ function Find-WordOverlap {
                 CurrentEnd  = $cj
 
                 PreviousConsumed =
-                    $pi - $i
+                    $previousConsumed
 
                 CurrentConsumed =
-                    $cj - $j
+                    $currentConsumed
 
                 SkippedPrevious =
                     $skippedPrevious
 
                 SkippedCurrent =
                     $skippedCurrent
+
+                ReachesPreviousEnd =
+                    $reachesPreviousEnd
+
+                ReachesCurrentEnd =
+                    $reachesCurrentEnd
+
+                ReachesBothEnds =
+                    (
+                        $reachesPreviousEnd -and
+                        $reachesCurrentEnd
+                    )
 
                 DurationDifference =
                     $durationDifference
@@ -132,6 +158,11 @@ function Find-WordOverlap {
             # 1. Más matches
             # 2. Menos palabras saltadas
             # 3. Menor diferencia temporal
+            #
+            # NOTA:
+            # No hacemos todavía que ReachesBothEnds domine
+            # la selección. Primero queremos observar el
+            # comportamiento real con esta métrica disponible.
             # ----------------------------------------------------
 
             if ($null -eq $best) {
