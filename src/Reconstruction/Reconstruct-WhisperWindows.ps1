@@ -303,7 +303,126 @@ function Reconstruct-WhisperWindows {
                 return $false
             }
 
-            # Helper: Add new words avoiding duplicates based on text and timing
+            # Helper: strictly-gated Level 2 transitive deduplication (Issue 2).
+            #
+            # Level 1 (Test-WordAlreadyExists) can only absorb an event when the
+            # IMMEDIATE previous window also re-transcribed it inside the band.
+            # When a window omits an event that earlier windows DID transcribe,
+            # the same event can reappear one or more windows later and Level 1
+            # never absorbs it. What survives transport through the gap is the
+            # ACCUMULATED transcript (finalWords), not the previous window.
+            #
+            # Level 2 therefore compares against finalWords restricted to the
+            # same overlap band, but ONLY under the strict conditions below.
+            # The timing limit is deliberately Min(driftAllowance, 0.5): a
+            # transitive bridge must never be wider than the strictest adjacent
+            # tolerance, otherwise two distinct events that happen to be close
+            # in time could be collapsed just because the intermediate window
+            # stayed silent for that text.
+            function Test-TransitiveWordAlreadyExists {
+                param(
+                    [object]$newWord,
+                    [object[]]$existingWords,
+                    [double]$bandStart,
+                    [double]$bandEnd,
+                    [double]$transitiveAllowance,
+                    [hashtable]$prevBandByText,
+                    [hashtable]$currBandByText,
+                    [hashtable]$accBandByText,
+                    [System.Collections.Generic.HashSet[int]]$claimed
+                )
+
+                $newTextNormalized = ($newWord.Text.ToLower()).Trim()
+
+                # 1. The new word must itself fall inside the overlap band.
+                if (-not (
+                    $newWord.From -lt $bandEnd -and
+                    $newWord.To   -gt $bandStart
+                )) {
+                    return $false
+                }
+
+                # 2. Only real content participates (punctuation has empty Key).
+                if ([string]::IsNullOrEmpty($newWord.Key)) {
+                    return $false
+                }
+
+                # 3. Clean omission gap: the immediate previous window must have
+                #    transcribed ZERO occurrences of this text. If it contains
+                #    the text at all, count/order/timing evidence belongs to
+                #    Level 1 and Level 2 must not override it.
+                if ($prevBandByText.ContainsKey($newTextNormalized)) {
+                    return $false
+                }
+
+                # 4. The accumulated band must contain the same normalized text.
+                if (-not $accBandByText.ContainsKey($newTextNormalized)) {
+                    return $false
+                }
+
+                $accOccurrences = @($accBandByText[$newTextNormalized])
+                $currOccurrences = @($currBandByText[$newTextNormalized])
+
+                # 5. Count of the text in the accumulated band must equal the
+                #    count in the current overlap (1:1 event identity).
+                if (
+                    $accOccurrences.Count -lt 1 -or
+                    $currOccurrences.Count -lt 1 -or
+                    $accOccurrences.Count -ne $currOccurrences.Count
+                ) {
+                    return $false
+                }
+
+                # 6+7. Pair occurrences by chronological order; every pair must
+                #      lie within the stricter transitive allowance.
+                $accSorted = @($accOccurrences | Sort-Object -Property From)
+                $currSorted = @($currOccurrences | Sort-Object -Property From)
+
+                for ($k = 0; $k -lt $accSorted.Count; $k++) {
+                    $fromDiff = [math]::Abs($accSorted[$k].From - $currSorted[$k].From)
+                    $toDiff   = [math]::Abs($accSorted[$k].To   - $currSorted[$k].To)
+
+                    if (
+                        $fromDiff -gt $transitiveAllowance -or
+                        $toDiff   -gt $transitiveAllowance
+                    ) {
+                        return $false
+                    }
+                }
+
+                # 8+9. Claim the chronological partner (one-to-one) and keep the
+                #      accumulated finalWords occurrence as the survivor.
+                $slot = -1
+                for ($k = 0; $k -lt $currSorted.Count; $k++) {
+                    if ($currSorted[$k].Id -eq $newWord.Id) {
+                        $slot = $k
+                        break
+                    }
+                }
+
+                if ($slot -lt 0) {
+                    return $false
+                }
+
+                $partner = $accSorted[$slot]
+
+                for ($idx = 0; $idx -lt $existingWords.Count; $idx++) {
+                    if ($existingWords[$idx].Id -eq $partner.Id) {
+                        if ($claimed.Contains($idx)) {
+                            return $false
+                        }
+                        $claimed.Add($idx) | Out-Null
+                        return $true
+                    }
+                }
+
+                return $false
+            }
+
+            # Helper: Add new words avoiding duplicates based on text and timing.
+            # Level 1 (contextual band evidence) runs first; if it does not
+            # absorb the word, the strictly-gated Level 2 transitive path is
+            # considered before appending the word.
             function Add-NewWordsWithTiming {
                 param(
                     [object[]]$currentWords,
@@ -312,7 +431,9 @@ function Reconstruct-WhisperWindows {
                     [double]$bandEnd,
                     [double]$driftAllowance,
                     [hashtable]$prevBandByText,
-                    [hashtable]$currBandByText
+                    [hashtable]$currBandByText,
+                    [double]$transitiveAllowance,
+                    [hashtable]$accBandByText
                 )
 
                 $result = @($finalWords)
@@ -330,11 +451,63 @@ function Reconstruct-WhisperWindows {
                             $currBandByText `
                             $claimed
                     )) {
-                        $result += $word
+                        # Level 1 did not absorb: try the transitive gap path.
+                        if (-not (
+                            Test-TransitiveWordAlreadyExists `
+                                $word `
+                                $result `
+                                $bandStart `
+                                $bandEnd `
+                                $transitiveAllowance `
+                                $prevBandByText `
+                                $currBandByText `
+                                $accBandByText `
+                                $claimed
+                        )) {
+                            $result += $word
+                        }
                     }
                 }
 
                 return $result
+            }
+
+            # ============================================================
+            # NIVEL 2 (Issue 2): DEDUPLICACION TRANSITIVA
+            #
+            # Nivel 1 solo puede absorber un evento cuando la ventana
+            # INMEDIATAMENTE anterior re-transcribio ese texto en la banda.
+            # Cuando una ventana omite un evento que ventanas anteriores si
+            # transcribieron, el evento puede reaparecer en la ventana actual
+            # y Nivel 1 lo deja pasar. La evidencia que sobrevive el hueco es
+            # el transcripto ACUMULADO (finalWords), no la ventana anterior.
+            # Nivel 2 compara contra finalWords restringido a la misma banda
+            # bajo las condiciones estrictas de Test-TransitiveWordAlreadyExists
+            # y solo se activa cuando Nivel 1 no absorbio el evento.
+            #
+            # El limite transitorio es deliberadamente Min(driftAllowance, 0.5):
+            # un puente transitorio nunca debe ser mas amplio que la tolerancia
+            # adyacente mas estricta, para no fusionar eventos legitimos que
+            # el destino coloco cerca en el tiempo cuando la ventana
+            # intermedia se quedo en silencio para ese texto.
+            # ============================================================
+
+            $transitiveAllowance = [math]::Min($driftAllowance, 0.5)
+            Write-Host "TRANSITIVE ALLOWANCE: $transitiveAllowance s (Issue 2 - estricto)"
+
+            # Ocurrencias acumuladas por texto dentro de la banda, desde
+            # finalWords ANTES de agregar los eventos de la ventana actual
+            # (misma semantica temporal del overlap selection).
+            $accBandByText = @{}
+            foreach ($finalWord in $finalWords) {
+                if ($finalWord.From -lt $overlapEnd -and $finalWord.To -gt $overlapStart) {
+                    $bandText = ($finalWord.Text.ToLower()).Trim()
+                    if ($accBandByText.ContainsKey($bandText)) {
+                        $accBandByText[$bandText] = @($accBandByText[$bandText]) + $finalWord
+                    } else {
+                        $accBandByText[$bandText] = @($finalWord)
+                    }
+                }
             }
 
             # Add words based on text and timing deduplication
@@ -345,7 +518,9 @@ function Reconstruct-WhisperWindows {
                 $overlapEnd `
                 $driftAllowance `
                 $prevBandByText `
-                $currBandByText
+                $currBandByText `
+                $transitiveAllowance `
+                $accBandByText
 
             # Build previousOverlapMap for all words in finalWords using their absolute index
             $previousOverlapMap = @{}
