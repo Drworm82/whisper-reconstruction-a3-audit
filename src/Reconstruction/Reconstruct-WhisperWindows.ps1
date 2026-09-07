@@ -25,56 +25,38 @@ function Reconstruct-WhisperWindows {
         }
     }
 
-    # ============================================================
-    # PRIMERA VENTANA
-    # ============================================================
-
     $finalWords = @(
         Build-WhisperWords $windows[0].Tokens -WindowIndex 0
     )
 
-    # ============================================================
-    # MAPA DEL OVERLAP DE LA VENTANA PREVIA
-    # ============================================================
-
     $previousOverlapMap = @{}
 
     if ($windows.Count -gt 1) {
-        $firstWords = $finalWords
-        $overlapStart = $windows[1].Start
-        $overlapEnd   = $windows[0].End
+        $firstOverlapStart = $windows[1].Start
+        $firstOverlapEnd   = $windows[0].End
 
-        $firstOverlap = @(
-            $firstWords |
+        foreach ($word in @(
+            $finalWords |
             Where-Object {
-                $_.From -lt $overlapEnd -and
-                $_.To   -gt $overlapStart
+                $_.From -lt $firstOverlapEnd -and
+                $_.To   -gt $firstOverlapStart
             }
-        )
-
-        foreach ($word in $firstOverlap) {
-            $foundIndex = -1
+        )) {
             for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
                 if ($finalWords[$idx].Id -eq $word.Id) {
-                    $foundIndex = $idx
+                    $previousOverlapMap[$word.Id] = $idx
                     break
                 }
-            }
-
-            if ($foundIndex -ne -1) {
-                $previousOverlapMap[$word.Id] = $foundIndex
-            } else {
-                Write-Host "DIAGNOSTICO INICIAL: Palabra del overlap '$($word.Text)' (ID: $($word.Id)) no encontrada en finalWords."
             }
         }
     }
 
-    # ============================================================
-    # VENTANAS SIGUIENTES
-    # ============================================================
+    # A prior MATCH may omit words that precede its selected anchor. Those
+    # omitted occurrences are retained here so a later MATCH can reuse the
+    # exact occurrence when it becomes an anchor.
+    $deferredWordsByText = @{}
 
     for ($i = 1; $i -lt $windows.Count; $i++) {
-
         $previous = $windows[$i - 1]
         $current  = $windows[$i]
 
@@ -85,10 +67,6 @@ function Reconstruct-WhisperWindows {
         $currentWords = @(
             Build-WhisperWords $current.Tokens -WindowIndex $i
         )
-
-        # --------------------------------------------------------
-        # SOLAPAMIENTO TEMPORAL
-        # --------------------------------------------------------
 
         $overlapStart = $current.Start
         $overlapEnd   = $previous.End
@@ -109,57 +87,44 @@ function Reconstruct-WhisperWindows {
             }
         )
 
-        # --------------------------------------------------------
-        # BUSCAR MATCH
-        # --------------------------------------------------------
-
-        $match = Find-WordOverlap `
-            $prevOverlap `
-            $currOverlap
+        $match = Find-WordOverlap $prevOverlap $currOverlap
 
         Write-Host ""
         Write-Host "============================================================"
         Write-Host "TRANSICION $($previous.Start)s -> $($current.Start)s"
         Write-Host "============================================================"
 
-        # --------------------------------------------------------
-        # VALIDAR MAPA Y MATCH
-        # --------------------------------------------------------
-
         if ($null -eq $previousOverlapMap) {
-            Write-Host "ERROR: NO EXISTE MAPA PREVIO"
-            continue
+            $previousOverlapMap = @{}
         }
 
         if ($null -eq $match) {
             Write-Host "SIN MATCH"
 
             $bandDuration = $overlapEnd - $overlapStart
-
             $driftAllowance = [math]::Max(
                 0.5,
                 [math]::Min(1.5, $bandDuration * 0.2)
             )
-            Write-Host "DRIFT ALLOWANCE: $driftAllowance s (banda $bandDuration s)"
 
             $prevBandByText = @{}
             $currBandByText = @{}
 
-            foreach ($overlapWord in $prevOverlap) {
-                $bandText = ($overlapWord.Text.ToLower()).Trim()
-                if ($prevBandByText.ContainsKey($bandText)) {
-                    $prevBandByText[$bandText] = @($prevBandByText[$bandText]) + $overlapWord
+            foreach ($word in $prevOverlap) {
+                $text = ($word.Text.ToLower()).Trim()
+                if ($prevBandByText.ContainsKey($text)) {
+                    $prevBandByText[$text] = @($prevBandByText[$text]) + $word
                 } else {
-                    $prevBandByText[$bandText] = @($overlapWord)
+                    $prevBandByText[$text] = @($word)
                 }
             }
 
-            foreach ($overlapWord in $currOverlap) {
-                $bandText = ($overlapWord.Text.ToLower()).Trim()
-                if ($currBandByText.ContainsKey($bandText)) {
-                    $currBandByText[$bandText] = @($currBandByText[$bandText]) + $overlapWord
+            foreach ($word in $currOverlap) {
+                $text = ($word.Text.ToLower()).Trim()
+                if ($currBandByText.ContainsKey($text)) {
+                    $currBandByText[$text] = @($currBandByText[$text]) + $word
                 } else {
-                    $currBandByText[$bandText] = @($overlapWord)
+                    $currBandByText[$text] = @($word)
                 }
             }
 
@@ -190,11 +155,8 @@ function Reconstruct-WhisperWindows {
                 }
 
                 for ($occ = 0; $occ -lt $prevOccurrences.Count; $occ++) {
-                    $prevOcc = $prevOccurrences[$occ]
-                    $currOcc = $currOccurrences[$occ]
-
-                    $fromDiff = [math]::Abs($prevOcc.From - $currOcc.From)
-                    $toDiff   = [math]::Abs($prevOcc.To   - $currOcc.To)
+                    $fromDiff = [math]::Abs($prevOccurrences[$occ].From - $currOccurrences[$occ].From)
+                    $toDiff   = [math]::Abs($prevOccurrences[$occ].To   - $currOccurrences[$occ].To)
 
                     if (
                         $fromDiff -gt $driftAllowance -or
@@ -219,7 +181,7 @@ function Reconstruct-WhisperWindows {
                     [System.Collections.Generic.HashSet[int]]$claimed
                 )
 
-                $newTextNormalized = ($newWord.Text.ToLower()).Trim()
+                $text = ($newWord.Text.ToLower()).Trim()
 
                 if (-not (
                     $newWord.From -lt $bandEnd -and
@@ -234,7 +196,7 @@ function Reconstruct-WhisperWindows {
 
                 if (-not (
                     Test-BandPairEvidence `
-                        $newTextNormalized `
+                        $text `
                         $prevBandByText `
                         $currBandByText `
                         $driftAllowance
@@ -244,9 +206,8 @@ function Reconstruct-WhisperWindows {
 
                 for ($idx = 0; $idx -lt $existingWords.Count; $idx++) {
                     $existing = $existingWords[$idx]
-                    $existingTextNormalized = ($existing.Text.ToLower()).Trim()
 
-                    if ($newTextNormalized -ne $existingTextNormalized) {
+                    if ($text -ne (($existing.Text.ToLower()).Trim())) {
                         continue
                     }
 
@@ -260,6 +221,7 @@ function Reconstruct-WhisperWindows {
                         if ($claimed.Contains($idx)) {
                             continue
                         }
+
                         $claimed.Add($idx) | Out-Null
                         return $true
                     }
@@ -281,7 +243,7 @@ function Reconstruct-WhisperWindows {
                     [System.Collections.Generic.HashSet[int]]$claimed
                 )
 
-                $newTextNormalized = ($newWord.Text.ToLower()).Trim()
+                $text = ($newWord.Text.ToLower()).Trim()
 
                 if (-not (
                     $newWord.From -lt $bandEnd -and
@@ -294,16 +256,16 @@ function Reconstruct-WhisperWindows {
                     return $false
                 }
 
-                if ($prevBandByText.ContainsKey($newTextNormalized)) {
+                if ($prevBandByText.ContainsKey($text)) {
                     return $false
                 }
 
-                if (-not $accBandByText.ContainsKey($newTextNormalized)) {
+                if (-not $accBandByText.ContainsKey($text)) {
                     return $false
                 }
 
-                $accOccurrences = @($accBandByText[$newTextNormalized])
-                $currOccurrences = @($currBandByText[$newTextNormalized])
+                $accOccurrences  = @($accBandByText[$text])
+                $currOccurrences = @($currBandByText[$text])
 
                 if (
                     $accOccurrences.Count -lt 1 -or
@@ -313,7 +275,7 @@ function Reconstruct-WhisperWindows {
                     return $false
                 }
 
-                $accSorted = @($accOccurrences | Sort-Object -Property From)
+                $accSorted  = @($accOccurrences  | Sort-Object -Property From)
                 $currSorted = @($currOccurrences | Sort-Object -Property From)
 
                 for ($k = 0; $k -lt $accSorted.Count; $k++) {
@@ -347,6 +309,7 @@ function Reconstruct-WhisperWindows {
                         if ($claimed.Contains($idx)) {
                             return $false
                         }
+
                         $claimed.Add($idx) | Out-Null
                         return $true
                     }
@@ -404,18 +367,19 @@ function Reconstruct-WhisperWindows {
             }
 
             $transitiveAllowance = [math]::Min($driftAllowance, 0.5)
-
             $accBandByText = @{}
-            foreach ($existingWord in $finalWords) {
+
+            foreach ($word in $finalWords) {
                 if (
-                    $existingWord.From -lt $overlapEnd -and
-                    $existingWord.To   -gt $overlapStart
+                    $word.From -lt $overlapEnd -and
+                    $word.To   -gt $overlapStart
                 ) {
-                    $bandText = ($existingWord.Text.ToLower()).Trim()
-                    if ($accBandByText.ContainsKey($bandText)) {
-                        $accBandByText[$bandText] = @($accBandByText[$bandText]) + $existingWord
+                    $text = ($word.Text.ToLower()).Trim()
+
+                    if ($accBandByText.ContainsKey($text)) {
+                        $accBandByText[$text] = @($accBandByText[$text]) + $word
                     } else {
-                        $accBandByText[$bandText] = @($existingWord)
+                        $accBandByText[$text] = @($word)
                     }
                 }
             }
@@ -433,7 +397,6 @@ function Reconstruct-WhisperWindows {
                     $accBandByText
             )
 
-            # Build previousOverlapMap for all words in finalWords using their absolute index
             $previousOverlapMap = @{}
             for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
                 $previousOverlapMap[$finalWords[$idx].Id] = $idx
@@ -449,13 +412,70 @@ function Reconstruct-WhisperWindows {
             continue
         }
 
-        $prefixCount = $previousOverlapMap[$matchedWord.Id]
+        # A match can select an anchor that was deferred by an earlier MATCH.
+        # Recover it into the accumulated transcript before calculating prefix.
+        $prefixCount = $null
+
+        if ($previousOverlapMap.ContainsKey($matchedWord.Id)) {
+            $prefixCount = $previousOverlapMap[$matchedWord.Id]
+        }
 
         if ($null -eq $prefixCount) {
             for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
                 if ($finalWords[$idx].Id -eq $matchedWord.Id) {
                     $prefixCount = $idx
                     break
+                }
+            }
+        }
+
+        if ($null -eq $prefixCount) {
+            $anchorText = ($matchedWord.Text.ToLower()).Trim()
+
+            if ($deferredWordsByText.ContainsKey($anchorText)) {
+                $candidate = $null
+
+                foreach ($deferred in @($deferredWordsByText[$anchorText])) {
+                    $sameFrom = [math]::Abs($deferred.From - $matchedWord.From) -le 0.000001
+                    $sameTo   = [math]::Abs($deferred.To   - $matchedWord.To)   -le 0.000001
+
+                    if ($sameFrom -and $sameTo) {
+                        $candidate = $deferred
+                        break
+                    }
+                }
+
+                if ($null -ne $candidate) {
+                    $insertAt = $finalWords.Count
+
+                    for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
+                        if ($finalWords[$idx].From -gt $candidate.From) {
+                            $insertAt = $idx
+                            break
+                        }
+                    }
+
+                    if ($insertAt -eq 0) {
+                        $finalWords = @($candidate) + $finalWords
+                    } elseif ($insertAt -eq $finalWords.Count) {
+                        $finalWords = @($finalWords) + $candidate
+                    } else {
+                        $finalWords = @($finalWords[0..($insertAt - 1)]) + $candidate + @($finalWords[$insertAt..($finalWords.Count - 1)])
+                    }
+
+                    $prefixCount = $insertAt
+                    Write-Host "RECUPERADO ANCLA DIFERIDA: '$($candidate.Text)'"
+
+                    $remaining = @(
+                        $deferredWordsByText[$anchorText] |
+                        Where-Object { $_.Id -ne $candidate.Id }
+                    )
+
+                    if ($remaining.Count -eq 0) {
+                        $deferredWordsByText.Remove($anchorText) | Out-Null
+                    } else {
+                        $deferredWordsByText[$anchorText] = $remaining
+                    }
                 }
             }
         }
@@ -476,17 +496,12 @@ function Reconstruct-WhisperWindows {
         }
 
         $prefix = @()
-
         if ($prefixCount -gt 0) {
             $prefix = @(
                 $finalWords |
                 Select-Object -First $prefixCount
             )
         }
-
-        # ========================================================
-        # CURRENT MATCH
-        # ========================================================
 
         $currentMatch = @(
             $currOverlap |
@@ -500,11 +515,8 @@ function Reconstruct-WhisperWindows {
             continue
         }
 
-        # ========================================================
-        # CORRECTED OFFSET FOR AFTER
-        # ========================================================
-
         $overlapStartInCurrent = -1
+
         if ($currOverlap.Count -gt 0) {
             for ($j = 0; $j -lt $currentWords.Count; $j++) {
                 if ($currentWords[$j].Id -eq $currOverlap[0].Id) {
@@ -529,29 +541,30 @@ function Reconstruct-WhisperWindows {
             continue
         }
 
-        # ========================================================
-        # AFTER
-        # ========================================================
-
         $after = @()
 
         if ($currentLastIndexInWords + 1 -lt $currentWords.Count) {
             $after = @(
                 $currentWords |
-                Select-Object `
-                    -Skip ($currentLastIndexInWords + 1)
+                Select-Object -Skip ($currentLastIndexInWords + 1)
             )
         }
 
-        # ========================================================
-        # POSICION ABSOLUTA DE LA NUEVA INSERCION
-        # ========================================================
+        # Preserve words before the selected MATCH as deferred candidates.
+        for ($k = 0; $k -lt $match.CurrentStart; $k++) {
+            $deferred = $currOverlap[$k]
+            $deferredText = ($deferred.Text.ToLower()).Trim()
 
-        $insertionStart = $prefix.Count
+            if ([string]::IsNullOrEmpty($deferred.Key)) {
+                continue
+            }
 
-        # ========================================================
-        # RECONSTRUIR
-        # ========================================================
+            if ($deferredWordsByText.ContainsKey($deferredText)) {
+                $deferredWordsByText[$deferredText] = @($deferredWordsByText[$deferredText]) + $deferred
+            } else {
+                $deferredWordsByText[$deferredText] = @($deferred)
+            }
+        }
 
         $newFinal = @()
 
@@ -567,13 +580,8 @@ function Reconstruct-WhisperWindows {
             $newFinal += $word
         }
 
-        $finalWords = @(
-            $newFinal
-        )
+        $finalWords = @($newFinal)
 
-        # Rebuild map from the complete accumulated transcript, not just currOverlap.
-        # A later transition may legitimately use as its match anchor a word that
-        # survived this MATCH but fell outside the current overlap band.
         $previousOverlapMap = @{}
         for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
             $previousOverlapMap[$finalWords[$idx].Id] = $idx
