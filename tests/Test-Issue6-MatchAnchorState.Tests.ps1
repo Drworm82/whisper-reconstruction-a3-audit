@@ -1,26 +1,32 @@
 # PRUEBA ISSUE 6 — ESTADO DEL ANCLA DESPUES DE MATCH
 #
-# Reproduce el caso en que un MATCH conserva palabras de la ventana actual
-# que quedan FUERA del overlap inmediato, y una transicion posterior necesita
-# una de esas palabras como ancla. El mapa anterior, si solo contiene
-# currOverlap de la transicion previa, no puede localizar ese ancla.
+# Reproduce el caso historico: despues de un MATCH, la reconstruccion puede
+# descartar una palabra que estaba ANTES del ancla del MATCH en currentWords.
+# Si esa palabra vuelve a aparecer como primera ancla de un MATCH posterior,
+# previousOverlapMap no puede localizarla en finalWords.
 #
 # Escenario:
-#   W0 [0,10]  -> historia + A B C
-#   W1 [5,15]  -> A B C + D E F G
-#   W2 [8,18]  -> D E F + G H
+#   W0 [0,10] -> A B C
+#   W1 [5,15] -> X A B C
+#   W2 [8,18] -> X A B C D
 #
-# En W0->W1, A B C forman el MATCH. D E F G quedan como "after" y se
-# conservan en finalWords, pero D no pertenece al currOverlap de la primera
-# transicion porque esta despues de 10s.
+# En W0->W1, X esta antes de A dentro del overlap [5,10], pero W0 no tiene X.
+# Find-WordOverlap encuentra A B C como MATCH. Al reconstruir, currentMatch
+# empieza en A, por lo que X de W1 queda descartada de finalWords.
 #
-# En W1->W2, D E F G forman el MATCH. El test verifica que el estado del
-# mapa permita continuar sin perder la historia ni el contenido posterior.
+# En W1->W2, el overlap es [8,15] y contiene X A B C en ambas ventanas.
+# Ahora Find-WordOverlap encuentra X A B C como MATCH y X es el ancla.
+# Como X fue descartada en la reconstruccion anterior, no existe en finalWords.
+# El comportamiento defectuoso debe producir:
+#   ERROR: EL ELEMENTO DEL MATCH NO TIENE MAPA
+#
+# Este test debe FALLAR con el comportamiento historico y PASAR solamente
+# despues de corregir la conservacion/estado del ancla.
 
 $projectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 . "$projectRoot\src\Load-WhisperReconstruction.ps1"
 
-Write-Host "=== PRUEBA ISSUE 6: ESTADO DEL ANCLA DESPUES DE MATCH ==="
+Write-Host "=== PRUEBA ISSUE 6: ANCLA DESCARTADA -> MATCH POSTERIOR ==="
 Write-Host ""
 
 function New-TestToken {
@@ -51,42 +57,36 @@ function New-TestWindow {
     }
 }
 
-# Build-WhisperWords usa el espacio inicial del token para detectar una
-# frontera de palabra. El primer token de cada palabra no inicial lleva
-# espacio; asi reproducimos la semantica de tokens de WhisperX.
 function T {
     param([string]$Text, [double]$From, [double]$To)
     New-TestToken $Text $From $To
 }
 
-# W0 [0,10]: historia inicial + A B C.
+# W0 [0,10]: solo A B C.
 $w0 = @(
-    (T 'inicio' 1.0 1.5),
-    (T ' A'     6.0 6.4),
-    (T ' B'     6.5 6.9),
-    (T ' C'     7.0 7.4)
+    (T ' A' 9.0 9.3),
+    (T ' B' 9.4 9.7),
+    (T ' C' 9.8 9.9)
 )
 
-# W1 [5,15]: A B C forman el MATCH. D E F G estan despues del overlap
-# [5,10] y se conservan como contenido nuevo de la ventana.
+# W1 [5,15]: X aparece ANTES de A dentro del primer overlap [5,10].
+# W0 no tiene X, asi que el MATCH correcto es A B C.
+# Al reconstruir desde A, X queda fuera de finalWords.
 $w1 = @(
-    (T ' A' 6.0 6.4),
-    (T ' B' 6.5 6.9),
-    (T ' C' 7.0 7.4),
-    (T ' D' 10.5 10.9),
-    (T ' E' 11.0 11.4),
-    (T ' F' 11.5 11.9),
-    (T ' G' 12.0 12.4)
+    (T ' X' 8.2 8.5),
+    (T ' A' 9.0 9.3),
+    (T ' B' 9.4 9.7),
+    (T ' C' 9.8 9.9)
 )
 
-# W2 [8,18]: D E F G estan en el overlap [8,15] y deben formar el
-# segundo MATCH. H queda como contenido posterior.
+# W2 [8,18]: X A B C estan ahora en el overlap [8,15].
+# El MATCH posterior empieza en X, que ya fue descartada de finalWords.
 $w2 = @(
-    (T ' D' 10.5 10.9),
-    (T ' E' 11.0 11.4),
-    (T ' F' 11.5 11.9),
-    (T ' G' 12.0 12.4),
-    (T ' H' 13.0 13.4)
+    (T ' X' 8.2 8.5),
+    (T ' A' 9.0 9.3),
+    (T ' B' 9.4 9.7),
+    (T ' C' 9.8 9.9),
+    (T ' D' 11.0 11.4)
 )
 
 $windows = @(
@@ -95,24 +95,33 @@ $windows = @(
     (New-TestWindow 8 18  $w2)
 )
 
+$transcriptPath = Join-Path $env:TEMP ("whisper-issue6-" + [Guid]::NewGuid().ToString() + ".txt")
+
 try {
+    Start-Transcript -Path $transcriptPath | Out-Null
     $result = @(Reconstruct-WhisperWindows -Windows $windows)
-    Write-Host "[OK] Reconstruct-WhisperWindows termino sin excepcion"
+    Stop-Transcript | Out-Null
 } catch {
+    try { Stop-Transcript | Out-Null } catch {}
     Write-Host "[FAIL] Reconstruct-WhisperWindows lanzo excepcion: $_"
+    Remove-Item -LiteralPath $transcriptPath -Force -ErrorAction SilentlyContinue
     exit 1
 }
 
-if ($result.Count -eq 0) {
-    Write-Host "[FAIL] Resultado vacio"
-    exit 1
+$diagnostics = Get-Content -LiteralPath $transcriptPath -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $transcriptPath -Force -ErrorAction SilentlyContinue
+
+foreach ($line in $diagnostics) {
+    Write-Host $line
 }
 
 $text = ($result | ForEach-Object { $_.Text }) -join ' '
+Write-Host ""
 Write-Host "Resultado: $text"
 Write-Host "Palabras: $($result.Count)"
 
-$expected = 'inicio A B C D E F G H'
+# La regresion debe completar el segundo MATCH sin perder el ancla X.
+$expected = 'X A B C D'
 
 if ($text -ne $expected) {
     Write-Host "[FAIL] Texto final inesperado"
@@ -121,8 +130,8 @@ if ($text -ne $expected) {
     exit 1
 }
 
-if ($result.Count -ne 9) {
-    Write-Host "[FAIL] Conteo inesperado: $($result.Count), esperado 9"
+if ($result.Count -ne 5) {
+    Write-Host "[FAIL] Conteo inesperado: $($result.Count), esperado 5"
     exit 1
 }
 
@@ -133,9 +142,15 @@ for ($i = 1; $i -lt $result.Count; $i++) {
     }
 }
 
-Write-Host "[OK] El ancla D sobrevivio al primer MATCH y permitio el segundo MATCH"
-Write-Host "[OK] Prefijo historico conservado"
-Write-Host "[OK] 9 palabras finales"
+$errorLines = @($diagnostics | Where-Object { $_ -match 'ERROR: EL ELEMENTO DEL MATCH NO TIENE MAPA' })
+if ($errorLines.Count -gt 0) {
+    Write-Host "[FAIL] Se detecto el error historico: EL ELEMENTO DEL MATCH NO TIENE MAPA"
+    exit 1
+}
+
+Write-Host "[OK] El ancla X sobrevivio al segundo MATCH"
+Write-Host "[OK] Prefijo/historia conservados"
+Write-Host "[OK] 5 palabras finales"
 Write-Host "[OK] Orden temporal monotono"
 Write-Host ""
 Write-Host "=== PRUEBA ISSUE 6 PASSED ==="
