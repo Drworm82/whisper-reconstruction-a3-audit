@@ -8,14 +8,14 @@
 # Escenario:
 #   W0 [0,10]  -> historia + A B C
 #   W1 [5,15]  -> A B C + D E F G
-#   W2 [8,18]  -> D E F + G
+#   W2 [8,18]  -> D E F + G H
 #
 # En W0->W1, A B C forman el MATCH. D E F G quedan como "after" y se
-# conservan en finalWords, pero D (la primera palabra del siguiente overlap)
-# esta fuera del currOverlap de la primera transicion.
+# conservan en finalWords, pero D no pertenece al currOverlap de la primera
+# transicion porque esta despues de 10s.
 #
-# En W1->W2, D E F forman el siguiente MATCH. El bug aparece si
-# previousOverlapMap no contiene D aunque D ya este en finalWords.
+# En W1->W2, D E F G forman el MATCH. El test verifica que el estado del
+# mapa permita continuar sin perder la historia ni el contenido posterior.
 
 $projectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 . "$projectRoot\src\Load-WhisperReconstruction.ps1"
@@ -51,34 +51,42 @@ function New-TestWindow {
     }
 }
 
-# W0 [0,10]: la primera transicion tiene A B C como bloque comun.
+# Build-WhisperWords usa el espacio inicial del token para detectar una
+# frontera de palabra. El primer token de cada palabra no inicial lleva
+# espacio; asi reproducimos la semantica de tokens de WhisperX.
+function T {
+    param([string]$Text, [double]$From, [double]$To)
+    New-TestToken $Text $From $To
+}
+
+# W0 [0,10]: historia inicial + A B C.
 $w0 = @(
-    (New-TestToken 'inicio' 1.0 1.5),
-    (New-TestToken 'A'      6.0 6.4),
-    (New-TestToken 'B'      6.5 6.9),
-    (New-TestToken 'C'      7.0 7.4)
+    (T 'inicio' 1.0 1.5),
+    (T ' A'     6.0 6.4),
+    (T ' B'     6.5 6.9),
+    (T ' C'     7.0 7.4)
 )
 
-# W1 [5,15]: A B C son el MATCH con W0. D E F G quedan despues del
-# overlap [5,10] y por tanto deben sobrevivir en finalWords.
+# W1 [5,15]: A B C forman el MATCH. D E F G estan despues del overlap
+# [5,10] y se conservan como contenido nuevo de la ventana.
 $w1 = @(
-    (New-TestToken 'A' 6.0 6.4),
-    (New-TestToken 'B' 6.5 6.9),
-    (New-TestToken 'C' 7.0 7.4),
-    (New-TestToken 'D' 10.5 10.9),
-    (New-TestToken 'E' 11.0 11.4),
-    (New-TestToken 'F' 11.5 11.9),
-    (New-TestToken 'G' 12.0 12.4)
+    (T ' A' 6.0 6.4),
+    (T ' B' 6.5 6.9),
+    (T ' C' 7.0 7.4),
+    (T ' D' 10.5 10.9),
+    (T ' E' 11.0 11.4),
+    (T ' F' 11.5 11.9),
+    (T ' G' 12.0 12.4)
 )
 
-# W2 [8,18]: su overlap con W1 es [8,15], por lo que D E F G pertenecen
-# a la banda. No incluimos C porque termina antes de 8s.
+# W2 [8,18]: D E F G estan en el overlap [8,15] y deben formar el
+# segundo MATCH. H queda como contenido posterior.
 $w2 = @(
-    (New-TestToken 'D' 10.5 10.9),
-    (New-TestToken 'E' 11.0 11.4),
-    (New-TestToken 'F' 11.5 11.9),
-    (New-TestToken 'G' 12.0 12.4),
-    (New-TestToken 'H' 13.0 13.4)
+    (T ' D' 10.5 10.9),
+    (T ' E' 11.0 11.4),
+    (T ' F' 11.5 11.9),
+    (T ' G' 12.0 12.4),
+    (T ' H' 13.0 13.4)
 )
 
 $windows = @(
