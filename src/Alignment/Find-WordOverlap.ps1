@@ -15,6 +15,7 @@ function Find-WordOverlap {
             $cj = $j
 
             $matches = 0
+            $exactTextMatches = 0
             $skippedPrevious = 0
             $skippedCurrent = 0
 
@@ -31,6 +32,13 @@ function Find-WordOverlap {
                 ) {
 
                     $matches++
+
+                    if (
+                        $previousWords[$pi].Text.Trim() -eq
+                        $currentWords[$cj].Text.Trim()
+                    ) {
+                        $exactTextMatches++
+                    }
 
                     $pi++
                     $cj++
@@ -110,6 +118,9 @@ function Find-WordOverlap {
 
                 Matches = $matches
 
+                ExactTextMatches =
+                    $exactTextMatches
+
                 PreviousStart = $i
                 CurrentStart  = $j
 
@@ -135,9 +146,10 @@ function Find-WordOverlap {
             # ----------------------------------------------------
             # CRITERIO DE SELECCION
             #
-            # 1. Más matches
-            # 2. Menos palabras saltadas
-            # 3. Menor diferencia temporal
+            # 1. Más matches con texto idéntico (identidad del bloque)
+            # 2. Más matches (coincidencia de Keys)
+            # 3. Menos palabras saltadas
+            # 4. Menor diferencia temporal
             # ----------------------------------------------------
 
             if ($null -eq $best) {
@@ -148,6 +160,18 @@ function Find-WordOverlap {
             }
 
             if (
+                $candidate.ExactTextMatches -gt
+                $best.ExactTextMatches
+            ) {
+
+                $best = $candidate
+
+                continue
+            }
+
+            if (
+                $candidate.ExactTextMatches -eq
+                $best.ExactTextMatches -and
                 $candidate.Matches -gt
                 $best.Matches
             ) {
@@ -158,6 +182,8 @@ function Find-WordOverlap {
             }
 
             if (
+                $candidate.ExactTextMatches -eq
+                $best.ExactTextMatches -and
                 $candidate.Matches -eq
                 $best.Matches
             ) {
