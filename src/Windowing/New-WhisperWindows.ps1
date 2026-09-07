@@ -45,14 +45,17 @@ function New-WhisperWindows {
 
     $windows = @()
     $windowStart = $minFrom
+    $assigned = @{}
 
     while ($windowStart -lt $maxTo) {
         $windowEnd = $windowStart + $WindowDurationSeconds
 
         $windowWords = @()
-        foreach ($word in $Words) {
+        for ($w = 0; $w -lt $Words.Count; $w++) {
+            $word = $Words[$w]
             if ($word.From -ge $windowStart -and $word.To -le $windowEnd) {
                 $windowWords += $word
+                $assigned[$w] = $true
             }
         }
 
@@ -77,11 +80,99 @@ function New-WhisperWindows {
                 Start  = $windowStart
                 End    = $windowEnd
                 Tokens = @($tokens)
+                Words  = @($windowWords)
             }
         }
 
         $windowStart += $step
     }
+
+    # ============================================================
+    # PASADA DE RESCATE
+    #
+    # Solo para palabras que No entraron en NINGUNA ventana por
+    # contencion estricta (duracion larga que cae en el hueco de
+    # la cuadricula). Se asignan a la UNA ventana de la cuadricula
+    # con mayor solapamiento temporal real; en caso de empate, a la
+    # que empieza antes. El rescate nunca duplica una palabra entre
+    # ventanas.
+    # ============================================================
+
+    $gridStarts = @()
+    $gridStart = $minFrom
+    while ($gridStart -lt $maxTo) {
+        $gridStarts += $gridStart
+        $gridStart += $step
+    }
+
+    for ($w = 0; $w -lt $Words.Count; $w++) {
+        if ($assigned.ContainsKey($w)) {
+            continue
+        }
+
+        $word = $Words[$w]
+
+        $bestStart = $null
+        $bestOverlap = 0
+
+        foreach ($candidateStart in $gridStarts) {
+            $candidateEnd = $candidateStart + $WindowDurationSeconds
+            $overlap = (
+                [math]::Min($candidateEnd, $word.To) -
+                [math]::Max($candidateStart, $word.From)
+            )
+
+            if ($overlap -gt 0) {
+                if ($null -eq $bestStart -or $overlap -gt $bestOverlap) {
+                    $bestStart = $candidateStart
+                    $bestOverlap = $overlap
+                }
+            }
+        }
+
+        if ($null -eq $bestStart) {
+            continue
+        }
+
+        $targetWindow = $null
+        foreach ($window in $windows) {
+            if ($window.Start -eq $bestStart) {
+                $targetWindow = $window
+                break
+            }
+        }
+
+        if ($null -eq $targetWindow) {
+            $targetWindow = [PSCustomObject]@{
+                Start  = $bestStart
+                End    = $bestStart + $WindowDurationSeconds
+                Words  = @()
+                Tokens = @()
+            }
+            $windows += $targetWindow
+        }
+
+        $targetWindow.Words = @($targetWindow.Words + $word) | Sort-Object -Property From
+
+        $rescuedTokens = @()
+        $firstRescued = $true
+        foreach ($rescuedWord in $targetWindow.Words) {
+            if ($firstRescued) {
+                $tokenText = $rescuedWord.Text
+                $firstRescued = $false
+            } else {
+                $tokenText = " " + $rescuedWord.Text
+            }
+            $rescuedTokens += [PSCustomObject]@{
+                Text = $tokenText
+                From = $rescuedWord.From
+                To   = $rescuedWord.To
+            }
+        }
+        $targetWindow.Tokens = @($rescuedTokens)
+    }
+
+    $windows = @($windows | Sort-Object -Property Start)
 
     return @($windows)
 }
