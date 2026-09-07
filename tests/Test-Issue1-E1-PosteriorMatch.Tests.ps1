@@ -63,7 +63,10 @@ Assert-True ((Get-Count $result 'n') -eq 1) 'N aparece exactamente una vez'
 Assert-True ((Get-Count $result 'o') -eq 1) 'O aparece exactamente una vez'
 Assert-True ((Get-Count $result 'r') -eq 1) 'R posterior al MATCH se conserva'
 Assert-True ((Get-Count $result 'x') -eq 1) 'X anterior al transcript acumulado se conserva'
-Assert-True ($result.Count -eq 11) 'Se conservan exactamente 11 palabras'
+# Q pertenece al overlap de W1 y es sustituida por O en el MATCH posterior.
+# No debe sobrevivir como una segunda hipotesis del mismo evento.
+Assert-True ((Get-Count $result 'q') -eq 0) 'Q de W1 es descartada por el MATCH posterior'
+Assert-True ($result.Count -eq 10) 'Se conservan exactamente 10 palabras'
 
 for ($i = 1; $i -lt $result.Count; $i++) {
     if ($result[$i].From -lt $result[$i - 1].From) {
