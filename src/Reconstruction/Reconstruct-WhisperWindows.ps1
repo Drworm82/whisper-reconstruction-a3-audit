@@ -134,34 +134,6 @@ function Reconstruct-WhisperWindows {
         if ($null -eq $match) {
             Write-Host "SIN MATCH"
 
-            # --------------------------------------------------------
-            # DEDUPLICACION CONTEXTUAL EN SIN MATCH (Issue 3)
-            #
-            # Dos ventanas solapadas re-transcriben la MISMA banda de
-            # audio [overlapStart, overlapEnd). Un mismo evento puede
-            # aparecer con timestamps desplazados por deriva de ASR; la
-            # tolerancia fija de +/-0.5s no lo alcanza y la palabra
-            # queda duplicada. Para absorber esa re-transcripcion SIN
-            # fusionar dos ocurrencias legitimas se exige evidencia de
-            # correspondencia 1:1 dentro de la banda:
-            #
-            #   1. la palabra nueva cae dentro de la banda;
-            #   2. la Key no es vacia (contenido real, no puntuacion);
-            #   3. el texto coincide tras la normalizacion existente;
-            #   4. el mismo texto aparece el MISMO numero de veces en la
-            #      banda de ambas ventanas y en el MISMO orden dentro
-            #      del margen de deriva (emparejamiento 1:1 inequivoco);
-            #   5. la ocurrencia previa emparejada no absorbe dos veces
-            #      (one-to-one con un conjunto 'claimed');
-            #   6. la tolerancia deriva del volumen de audio re-transcrito
-            #      (mas re-transcripcion, mas deriva acumulable), acotada
-            #      entre +/-0.5s (comportamiento historico) y +/-1.5s.
-            #
-            # Fuera de la banda o sin evidencia 1:1, se conserva la
-            # palabra: es preferible conservar antes que absorber una
-            # ocurrencia potencialmente legitima.
-            # --------------------------------------------------------
-
             $bandDuration = $overlapEnd - $overlapStart
 
             $driftAllowance = [math]::Max(
@@ -170,10 +142,6 @@ function Reconstruct-WhisperWindows {
             )
             Write-Host "DRIFT ALLOWANCE: $driftAllowance s (banda $bandDuration s)"
 
-            # Indice de ocurrencias por texto normalizado dentro de la
-            # banda, por ventana. Es la evidencia de correspondencia 1:1
-            # en orden: la k-esima ocurrencia de una ventana debe caer
-            # dentro del margen de deriva de la k-esima de la otra.
             $prevBandByText = @{}
             $currBandByText = @{}
 
@@ -195,7 +163,6 @@ function Reconstruct-WhisperWindows {
                 }
             }
 
-            # Helper: verifica la correspondencia 1:1 en orden dentro de la banda
             function Test-BandPairEvidence {
                 param(
                     [string]$text,
@@ -240,7 +207,6 @@ function Reconstruct-WhisperWindows {
                 return $true
             }
 
-            # Helper: Test if a word already exists based on text and timing
             function Test-WordAlreadyExists {
                 param(
                     [object]$newWord,
@@ -278,7 +244,6 @@ function Reconstruct-WhisperWindows {
 
                 for ($idx = 0; $idx -lt $existingWords.Count; $idx++) {
                     $existing = $existingWords[$idx]
-
                     $existingTextNormalized = ($existing.Text.ToLower()).Trim()
 
                     if ($newTextNormalized -ne $existingTextNormalized) {
@@ -303,22 +268,6 @@ function Reconstruct-WhisperWindows {
                 return $false
             }
 
-            # Helper: strictly-gated Level 2 transitive deduplication (Issue 2).
-            #
-            # Level 1 (Test-WordAlreadyExists) can only absorb an event when the
-            # IMMEDIATE previous window also re-transcribed it inside the band.
-            # When a window omits an event that earlier windows DID transcribe,
-            # the same event can reappear one or more windows later and Level 1
-            # never absorbs it. What survives transport through the gap is the
-            # ACCUMULATED transcript (finalWords), not the previous window.
-            #
-            # Level 2 therefore compares against finalWords restricted to the
-            # same overlap band, but ONLY under the strict conditions below.
-            # The timing limit is deliberately Min(driftAllowance, 0.5): a
-            # transitive bridge must never be wider than the strictest adjacent
-            # tolerance, otherwise two distinct events that happen to be close
-            # in time could be collapsed just because the intermediate window
-            # stayed silent for that text.
             function Test-TransitiveWordAlreadyExists {
                 param(
                     [object]$newWord,
@@ -334,7 +283,6 @@ function Reconstruct-WhisperWindows {
 
                 $newTextNormalized = ($newWord.Text.ToLower()).Trim()
 
-                # 1. The new word must itself fall inside the overlap band.
                 if (-not (
                     $newWord.From -lt $bandEnd -and
                     $newWord.To   -gt $bandStart
@@ -342,20 +290,14 @@ function Reconstruct-WhisperWindows {
                     return $false
                 }
 
-                # 2. Only real content participates (punctuation has empty Key).
                 if ([string]::IsNullOrEmpty($newWord.Key)) {
                     return $false
                 }
 
-                # 3. Clean omission gap: the immediate previous window must have
-                #    transcribed ZERO occurrences of this text. If it contains
-                #    the text at all, count/order/timing evidence belongs to
-                #    Level 1 and Level 2 must not override it.
                 if ($prevBandByText.ContainsKey($newTextNormalized)) {
                     return $false
                 }
 
-                # 4. The accumulated band must contain the same normalized text.
                 if (-not $accBandByText.ContainsKey($newTextNormalized)) {
                     return $false
                 }
@@ -363,8 +305,6 @@ function Reconstruct-WhisperWindows {
                 $accOccurrences = @($accBandByText[$newTextNormalized])
                 $currOccurrences = @($currBandByText[$newTextNormalized])
 
-                # 5. Count of the text in the accumulated band must equal the
-                #    count in the current overlap (1:1 event identity).
                 if (
                     $accOccurrences.Count -lt 1 -or
                     $currOccurrences.Count -lt 1 -or
@@ -373,8 +313,6 @@ function Reconstruct-WhisperWindows {
                     return $false
                 }
 
-                # 6+7. Pair occurrences by chronological order; every pair must
-                #      lie within the stricter transitive allowance.
                 $accSorted = @($accOccurrences | Sort-Object -Property From)
                 $currSorted = @($currOccurrences | Sort-Object -Property From)
 
@@ -390,8 +328,6 @@ function Reconstruct-WhisperWindows {
                     }
                 }
 
-                # 8+9. Claim the chronological partner (one-to-one) and keep the
-                #      accumulated finalWords occurrence as the survivor.
                 $slot = -1
                 for ($k = 0; $k -lt $currSorted.Count; $k++) {
                     if ($currSorted[$k].Id -eq $newWord.Id) {
@@ -419,10 +355,6 @@ function Reconstruct-WhisperWindows {
                 return $false
             }
 
-            # Helper: Add new words avoiding duplicates based on text and timing.
-            # Level 1 (contextual band evidence) runs first; if it does not
-            # absorb the word, the strictly-gated Level 2 transitive path is
-            # considered before appending the word.
             function Add-NewWordsWithTiming {
                 param(
                     [object[]]$currentWords,
@@ -451,7 +383,6 @@ function Reconstruct-WhisperWindows {
                             $currBandByText `
                             $claimed
                     )) {
-                        # Level 1 did not absorb: try the transitive gap path.
                         if (-not (
                             Test-TransitiveWordAlreadyExists `
                                 $word `
@@ -469,58 +400,38 @@ function Reconstruct-WhisperWindows {
                     }
                 }
 
-                return $result
+                return @($result)
             }
 
-            # ============================================================
-            # NIVEL 2 (Issue 2): DEDUPLICACION TRANSITIVA
-            #
-            # Nivel 1 solo puede absorber un evento cuando la ventana
-            # INMEDIATAMENTE anterior re-transcribio ese texto en la banda.
-            # Cuando una ventana omite un evento que ventanas anteriores si
-            # transcribieron, el evento puede reaparecer en la ventana actual
-            # y Nivel 1 lo deja pasar. La evidencia que sobrevive el hueco es
-            # el transcripto ACUMULADO (finalWords), no la ventana anterior.
-            # Nivel 2 compara contra finalWords restringido a la misma banda
-            # bajo las condiciones estrictas de Test-TransitiveWordAlreadyExists
-            # y solo se activa cuando Nivel 1 no absorbio el evento.
-            #
-            # El limite transitorio es deliberadamente Min(driftAllowance, 0.5):
-            # un puente transitorio nunca debe ser mas amplio que la tolerancia
-            # adyacente mas estricta, para no fusionar eventos legitimos que
-            # el destino coloco cerca en el tiempo cuando la ventana
-            # intermedia se quedo en silencio para ese texto.
-            # ============================================================
-
             $transitiveAllowance = [math]::Min($driftAllowance, 0.5)
-            Write-Host "TRANSITIVE ALLOWANCE: $transitiveAllowance s (Issue 2 - estricto)"
 
-            # Ocurrencias acumuladas por texto dentro de la banda, desde
-            # finalWords ANTES de agregar los eventos de la ventana actual
-            # (misma semantica temporal del overlap selection).
             $accBandByText = @{}
-            foreach ($finalWord in $finalWords) {
-                if ($finalWord.From -lt $overlapEnd -and $finalWord.To -gt $overlapStart) {
-                    $bandText = ($finalWord.Text.ToLower()).Trim()
+            foreach ($existingWord in $finalWords) {
+                if (
+                    $existingWord.From -lt $overlapEnd -and
+                    $existingWord.To   -gt $overlapStart
+                ) {
+                    $bandText = ($existingWord.Text.ToLower()).Trim()
                     if ($accBandByText.ContainsKey($bandText)) {
-                        $accBandByText[$bandText] = @($accBandByText[$bandText]) + $finalWord
+                        $accBandByText[$bandText] = @($accBandByText[$bandText]) + $existingWord
                     } else {
-                        $accBandByText[$bandText] = @($finalWord)
+                        $accBandByText[$bandText] = @($existingWord)
                     }
                 }
             }
 
-            # Add words based on text and timing deduplication
-            $finalWords = Add-NewWordsWithTiming `
-                $currentWords `
-                $finalWords `
-                $overlapStart `
-                $overlapEnd `
-                $driftAllowance `
-                $prevBandByText `
-                $currBandByText `
-                $transitiveAllowance `
-                $accBandByText
+            $finalWords = @(
+                Add-NewWordsWithTiming `
+                    $currentWords `
+                    $finalWords `
+                    $overlapStart `
+                    $overlapEnd `
+                    $driftAllowance `
+                    $prevBandByText `
+                    $currBandByText `
+                    $transitiveAllowance `
+                    $accBandByText
+            )
 
             # Build previousOverlapMap for all words in finalWords using their absolute index
             $previousOverlapMap = @{}
@@ -528,7 +439,6 @@ function Reconstruct-WhisperWindows {
                 $previousOverlapMap[$finalWords[$idx].Id] = $idx
             }
 
-            # Continue reconstruction from this point without losing history
             continue
         }
 
@@ -542,7 +452,6 @@ function Reconstruct-WhisperWindows {
         $prefixCount = $previousOverlapMap[$matchedWord.Id]
 
         if ($null -eq $prefixCount) {
-            # Fallback de búsqueda directa por ID en finalWords
             for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
                 if ($finalWords[$idx].Id -eq $matchedWord.Id) {
                     $prefixCount = $idx
@@ -662,79 +571,14 @@ function Reconstruct-WhisperWindows {
             $newFinal
         )
 
-        # ========================================================
-        # CONSTRUIR MAPA RECORRIENDO CURROVERLAP
-        # ========================================================
-
+        # Rebuild map from the complete accumulated transcript, not just currOverlap.
+        # A later transition may legitimately use as its match anchor a word that
+        # survived this MATCH but fell outside the current overlap band.
         $previousOverlapMap = @{}
-
-        for ($k = 0; $k -lt $currOverlap.Count; $k++) {
-            $word = $currOverlap[$k]
-
-            # 1. Buscar esa palabra por Id dentro de finalWords
-            $foundIndex = -1
-            for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
-                if ($finalWords[$idx].Id -eq $word.Id) {
-                    $foundIndex = $idx
-                    break
-                }
-            }
-
-            # 2. Si existe: guardar: $previousOverlapMap[$word.Id] = índice absoluto
-            if ($foundIndex -ne -1) {
-                $previousOverlapMap[$word.Id] = $foundIndex
-            } else {
-                # 3. Si no existe: investigar por qué esa palabra fue descartada. No asignar null silenciosamente.
-                $reason = "Desconocida"
-                if ($k -lt $match.CurrentStart) {
-                    $reason = "Descartada por estar antes del inicio del match (CurrentStart = $($match.CurrentStart))"
-                } elseif ($k -ge ($match.CurrentStart + $match.CurrentConsumed)) {
-                    $reason = "Descartada por estar después de la zona consumida por el match (CurrentConsumed = $($match.CurrentConsumed))"
-                } else {
-                    $reason = "Omitida por alineamiento/distancia de edición durante el match"
-                }
-                Write-Host "DIAGNOSTICO: Palabra del overlap '$($word.Text)' (ID: $($word.Id)) fue descartada de finalWords. Razón: $reason"
-            }
+        for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
+            $previousOverlapMap[$finalWords[$idx].Id] = $idx
         }
-
-        # ========================================================
-        # DIAGNOSTICO
-        # ========================================================
-
-        Write-Host "PreviousStart      : $($match.PreviousStart)"
-        Write-Host "CurrentStart       : $($match.CurrentStart)"
-        Write-Host "CurrentConsumed    : $($match.CurrentConsumed)"
-        Write-Host "PrefixCount        : $($prefix.Count)"
-        Write-Host "CurrentMatch       : $($currentMatch.Count)"
-        Write-Host "After               : $($after.Count)"
-        Write-Host "FinalWords          : $($finalWords.Count)"
-
-        Write-Host ""
-        Write-Host "MAPA CURRENT OVERLAP:"
-
-        for ($k = 0; $k -lt $currOverlap.Count; $k++) {
-            $target = $currOverlap[$k]
-            
-            # Buscar en el mapa que acabamos de construir
-            if ($previousOverlapMap.ContainsKey($target.Id)) {
-                $targetLabel = $previousOverlapMap[$target.Id]
-            } else {
-                $targetLabel = "DISCARDED"
-            }
-
-            Write-Host (
-                "[{0,2}] [{1}] -> FINAL[{2}]" -f `
-                $k,
-                $target.Text,
-                $targetLabel
-            )
-        }
-
-        Write-Host ""
-        Write-Host "PALABRAS ACUMULADAS: $($finalWords.Count)"
     }
 
-    return @(
-        $finalWords
-    )
+    return @($finalWords)
 }
