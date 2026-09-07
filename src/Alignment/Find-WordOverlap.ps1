@@ -24,6 +24,8 @@ function Find-WordOverlap {
             ) {
 
                 if (
+                    $previousWords[$pi].Key -ne '' -and
+                    $currentWords[$cj].Key -ne '' -and
                     $previousWords[$pi].Key -eq
                     $currentWords[$cj].Key
                 ) {
@@ -42,6 +44,8 @@ function Find-WordOverlap {
 
                 if (
                     ($cj + 1) -lt $currentWords.Count -and
+                    $previousWords[$pi].Key -ne '' -and
+                    $currentWords[$cj + 1].Key -ne '' -and
                     $previousWords[$pi].Key -eq
                     $currentWords[$cj + 1].Key
                 ) {
@@ -58,6 +62,8 @@ function Find-WordOverlap {
 
                 if (
                     ($pi + 1) -lt $previousWords.Count -and
+                    $previousWords[$pi + 1].Key -ne '' -and
+                    $currentWords[$cj].Key -ne '' -and
                     $previousWords[$pi + 1].Key -eq
                     $currentWords[$cj].Key
                 ) {
