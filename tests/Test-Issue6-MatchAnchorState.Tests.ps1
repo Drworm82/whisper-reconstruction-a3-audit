@@ -51,7 +51,7 @@ $windows = @(
 try {
     $result = @(Reconstruct-WhisperWindows -Windows $windows)
 } catch {
-    Write-Host "[FAIL] Reconstruct-WhisperWindows lanzo excepcion: $_"
+    Write-Host "[FAIL] Reconstruct-WhisperWindows lanzo una excepcion: $_"
     exit 1
 }
 
@@ -78,9 +78,6 @@ if ($xWords.Count -ne 1) {
     exit 1
 }
 
-# No exigimos conservar el Id 1-0: al recuperar una palabra omitida, la
-# identidad de objeto depende de la politica de reconstruccion. Verificamos
-# el invariante funcional: la ocurrencia correcta de X existe exactamente una vez.
 if ([math]::Abs($xWords[0].From - 8.2) -gt 0.000001 -or [math]::Abs($xWords[0].To - 8.5) -gt 0.000001) {
     Write-Host "[FAIL] X recuperada con timestamps incorrectos: From=$($xWords[0].From) To=$($xWords[0].To)"
     exit 1
