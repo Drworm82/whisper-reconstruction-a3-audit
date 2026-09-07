@@ -1,14 +1,21 @@
 # PRUEBA ISSUE 6 — ESTADO DEL ANCLA DESPUES DE MATCH
 #
-# Reproduce la secuencia en la que un MATCH reconstruye finalWords usando
-# currentOverlap, pero el siguiente MATCH necesita como ancla una palabra
-# que ya sobrevivio en finalWords y no pertenece al currOverlap inmediato.
+# Reproduce el caso en que un MATCH conserva palabras de la ventana actual
+# que quedan FUERA del overlap inmediato, y una transicion posterior necesita
+# una de esas palabras como ancla. El mapa anterior, si solo contiene
+# currOverlap de la transicion previa, no puede localizar ese ancla.
 #
-# El comportamiento correcto es que el segundo MATCH pueda localizar el
-# ancla por Id y continuar reconstruyendo sin:
-#   ERROR: EL ELEMENTO DEL MATCH NO TIENE MAPA
+# Escenario:
+#   W0 [0,10]  -> historia + A B C
+#   W1 [5,15]  -> A B C + D E F G
+#   W2 [8,18]  -> D E F + G
 #
-# Este test NO modifica produccion. Solo verifica la regresion descrita.
+# En W0->W1, A B C forman el MATCH. D E F G quedan como "after" y se
+# conservan en finalWords, pero D (la primera palabra del siguiente overlap)
+# esta fuera del currOverlap de la primera transicion.
+#
+# En W1->W2, D E F forman el siguiente MATCH. El bug aparece si
+# previousOverlapMap no contiene D aunque D ya este en finalWords.
 
 $projectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 . "$projectRoot\src\Load-WhisperReconstruction.ps1"
@@ -16,22 +23,17 @@ $projectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Pa
 Write-Host "=== PRUEBA ISSUE 6: ESTADO DEL ANCLA DESPUES DE MATCH ==="
 Write-Host ""
 
-function New-TestWord {
+function New-TestToken {
     param(
-        [int]$Id,
         [string]$Text,
         [double]$From,
         [double]$To
     )
 
-    $key = ($Text.ToLower() -replace '[^a-z0-9áéíóúüñ]', '')
-
     [PSCustomObject]@{
-        Id   = $Id
         Text = $Text
         From = $From
         To   = $To
-        Key  = $key
     }
 }
 
@@ -39,59 +41,52 @@ function New-TestWindow {
     param(
         [double]$Start,
         [double]$End,
-        [object[]]$Words
+        [object[]]$Tokens
     )
 
     [PSCustomObject]@{
-        Start = $Start
-        End   = $End
-        Words = @($Words)
+        Start  = $Start
+        End    = $End
+        Tokens = @($Tokens)
     }
 }
 
-# W0: historia inicial.
+# W0 [0,10]: la primera transicion tiene A B C como bloque comun.
 $w0 = @(
-    (New-TestWord  1 'uno'     0.2 0.7),
-    (New-TestWord  2 'dos'     0.8 1.3),
-    (New-TestWord  3 'tres'    1.4 1.9),
-    (New-TestWord  4 'cuatro'  2.0 2.6),
-    (New-TestWord  5 'cinco'   2.7 3.3),
-    (New-TestWord  6 'seis'    3.4 3.9),
-    (New-TestWord  7 'siete'   4.0 4.6),
-    (New-TestWord  8 'ocho'    5.0 5.5),
-    (New-TestWord  9 'nueve'   5.6 6.2)
+    (New-TestToken 'inicio' 1.0 1.5),
+    (New-TestToken 'A'      6.0 6.4),
+    (New-TestToken 'B'      6.5 6.9),
+    (New-TestToken 'C'      7.0 7.4)
 )
 
-# W1 comparte un bloque con W0. El MATCH debe anclar la historia en
-# 'seis/siete/ocho' y reconstruir conservando el prefijo anterior.
+# W1 [5,15]: A B C son el MATCH con W0. D E F G quedan despues del
+# overlap [5,10] y por tanto deben sobrevivir en finalWords.
 $w1 = @(
-    (New-TestWord  6 'seis'    3.4 3.9),
-    (New-TestWord  7 'siete'   4.0 4.6),
-    (New-TestWord  8 'ocho'    5.0 5.5),
-    (New-TestWord 10 'diez'    6.3 6.9),
-    (New-TestWord 11 'once'    7.0 7.6),
-    (New-TestWord 12 'doce'    7.7 8.3)
+    (New-TestToken 'A' 6.0 6.4),
+    (New-TestToken 'B' 6.5 6.9),
+    (New-TestToken 'C' 7.0 7.4),
+    (New-TestToken 'D' 10.5 10.9),
+    (New-TestToken 'E' 11.0 11.4),
+    (New-TestToken 'F' 11.5 11.9),
+    (New-TestToken 'G' 12.0 12.4)
 )
 
-# W2 contiene como overlap inmediato solo el tramo final de W1, pero
-# su MATCH posterior debe poder usar 'diez' (ID 10), que ya forma parte
-# de finalWords pero no necesariamente del overlap que genero el mapa.
+# W2 [8,18]: su overlap con W1 es [8,15], por lo que D E F G pertenecen
+# a la banda. No incluimos C porque termina antes de 8s.
 $w2 = @(
-    (New-TestWord 11 'once'    7.0 7.6),
-    (New-TestWord 12 'doce'    7.7 8.3),
-    (New-TestWord 13 'trece'   8.4 9.0),
-    (New-TestWord 14 'catorce' 9.1 9.7),
-    (New-TestWord 15 'quince'  9.8 10.4)
+    (New-TestToken 'D' 10.5 10.9),
+    (New-TestToken 'E' 11.0 11.4),
+    (New-TestToken 'F' 11.5 11.9),
+    (New-TestToken 'G' 12.0 12.4),
+    (New-TestToken 'H' 13.0 13.4)
 )
 
 $windows = @(
-    (New-TestWindow 0 6  $w0),
-    (New-TestWindow 3 9  $w1),
-    (New-TestWindow 6 12 $w2)
+    (New-TestWindow 0 10  $w0),
+    (New-TestWindow 5 15  $w1),
+    (New-TestWindow 8 18  $w2)
 )
 
-# El fixture se ejecuta directamente contra el reconstruidor para aislar
-# el estado entre transiciones. Los objetos ya contienen Id/Key/tiempos.
 try {
     $result = @(Reconstruct-WhisperWindows -Windows $windows)
     Write-Host "[OK] Reconstruct-WhisperWindows termino sin excepcion"
@@ -109,31 +104,17 @@ $text = ($result | ForEach-Object { $_.Text }) -join ' '
 Write-Host "Resultado: $text"
 Write-Host "Palabras: $($result.Count)"
 
-$hasErrorAnchor = $false
-foreach ($w in $result) {
-    if ($null -eq $w.Id) {
-        $hasErrorAnchor = $true
-        break
-    }
-}
+$expected = 'inicio A B C D E F G H'
 
-if ($text -notmatch 'uno.*dos.*tres') {
-    Write-Host "[FAIL] Se perdio el prefijo historico tras los MATCH"
+if ($text -ne $expected) {
+    Write-Host "[FAIL] Texto final inesperado"
+    Write-Host "Esperado: $expected"
+    Write-Host "Obtenido: $text"
     exit 1
 }
 
-if ($text -notmatch 'diez.*once.*doce') {
-    Write-Host "[FAIL] Se perdio la secuencia reconstruida despues del primer MATCH"
-    exit 1
-}
-
-if ($text -notmatch 'trece.*catorce.*quince') {
-    Write-Host "[FAIL] Se perdio contenido posterior al segundo MATCH"
-    exit 1
-}
-
-if ($result.Count -ne 15) {
-    Write-Host "[FAIL] Conteo inesperado: $($result.Count), esperado 15"
+if ($result.Count -ne 9) {
+    Write-Host "[FAIL] Conteo inesperado: $($result.Count), esperado 9"
     exit 1
 }
 
@@ -144,10 +125,9 @@ for ($i = 1; $i -lt $result.Count; $i++) {
     }
 }
 
+Write-Host "[OK] El ancla D sobrevivio al primer MATCH y permitio el segundo MATCH"
 Write-Host "[OK] Prefijo historico conservado"
-Write-Host "[OK] Secuencia intermedia conservada"
-Write-Host "[OK] Contenido posterior conservado"
-Write-Host "[OK] 15 palabras"
+Write-Host "[OK] 9 palabras finales"
 Write-Host "[OK] Orden temporal monotono"
 Write-Host ""
 Write-Host "=== PRUEBA ISSUE 6 PASSED ==="
