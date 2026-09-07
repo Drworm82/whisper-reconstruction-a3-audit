@@ -133,53 +133,219 @@ function Reconstruct-WhisperWindows {
 
         if ($null -eq $match) {
             Write-Host "SIN MATCH"
-            
+
+            # --------------------------------------------------------
+            # DEDUPLICACION CONTEXTUAL EN SIN MATCH (Issue 3)
+            #
+            # Dos ventanas solapadas re-transcriben la MISMA banda de
+            # audio [overlapStart, overlapEnd). Un mismo evento puede
+            # aparecer con timestamps desplazados por deriva de ASR; la
+            # tolerancia fija de +/-0.5s no lo alcanza y la palabra
+            # queda duplicada. Para absorber esa re-transcripcion SIN
+            # fusionar dos ocurrencias legitimas se exige evidencia de
+            # correspondencia 1:1 dentro de la banda:
+            #
+            #   1. la palabra nueva cae dentro de la banda;
+            #   2. la Key no es vacia (contenido real, no puntuacion);
+            #   3. el texto coincide tras la normalizacion existente;
+            #   4. el mismo texto aparece el MISMO numero de veces en la
+            #      banda de ambas ventanas y en el MISMO orden dentro
+            #      del margen de deriva (emparejamiento 1:1 inequivoco);
+            #   5. la ocurrencia previa emparejada no absorbe dos veces
+            #      (one-to-one con un conjunto 'claimed');
+            #   6. la tolerancia deriva del volumen de audio re-transcrito
+            #      (mas re-transcripcion, mas deriva acumulable), acotada
+            #      entre +/-0.5s (comportamiento historico) y +/-1.5s.
+            #
+            # Fuera de la banda o sin evidencia 1:1, se conserva la
+            # palabra: es preferible conservar antes que absorber una
+            # ocurrencia potencialmente legitima.
+            # --------------------------------------------------------
+
+            $bandDuration = $overlapEnd - $overlapStart
+
+            $driftAllowance = [math]::Max(
+                0.5,
+                [math]::Min(1.5, $bandDuration * 0.2)
+            )
+            Write-Host "DRIFT ALLOWANCE: $driftAllowance s (banda $bandDuration s)"
+
+            # Indice de ocurrencias por texto normalizado dentro de la
+            # banda, por ventana. Es la evidencia de correspondencia 1:1
+            # en orden: la k-esima ocurrencia de una ventana debe caer
+            # dentro del margen de deriva de la k-esima de la otra.
+            $prevBandByText = @{}
+            $currBandByText = @{}
+
+            foreach ($overlapWord in $prevOverlap) {
+                $bandText = ($overlapWord.Text.ToLower()).Trim()
+                if ($prevBandByText.ContainsKey($bandText)) {
+                    $prevBandByText[$bandText] = @($prevBandByText[$bandText]) + $overlapWord
+                } else {
+                    $prevBandByText[$bandText] = @($overlapWord)
+                }
+            }
+
+            foreach ($overlapWord in $currOverlap) {
+                $bandText = ($overlapWord.Text.ToLower()).Trim()
+                if ($currBandByText.ContainsKey($bandText)) {
+                    $currBandByText[$bandText] = @($currBandByText[$bandText]) + $overlapWord
+                } else {
+                    $currBandByText[$bandText] = @($overlapWord)
+                }
+            }
+
+            # Helper: verifica la correspondencia 1:1 en orden dentro de la banda
+            function Test-BandPairEvidence {
+                param(
+                    [string]$text,
+                    [hashtable]$prevBandByText,
+                    [hashtable]$currBandByText,
+                    [double]$driftAllowance
+                )
+
+                if (-not (
+                    $prevBandByText.ContainsKey($text) -and
+                    $currBandByText.ContainsKey($text)
+                )) {
+                    return $false
+                }
+
+                $prevOccurrences = @($prevBandByText[$text])
+                $currOccurrences = @($currBandByText[$text])
+
+                if (
+                    $prevOccurrences.Count -lt 1 -or
+                    $currOccurrences.Count -lt 1 -or
+                    $prevOccurrences.Count -ne $currOccurrences.Count
+                ) {
+                    return $false
+                }
+
+                for ($occ = 0; $occ -lt $prevOccurrences.Count; $occ++) {
+                    $prevOcc = $prevOccurrences[$occ]
+                    $currOcc = $currOccurrences[$occ]
+
+                    $fromDiff = [math]::Abs($prevOcc.From - $currOcc.From)
+                    $toDiff   = [math]::Abs($prevOcc.To   - $currOcc.To)
+
+                    if (
+                        $fromDiff -gt $driftAllowance -or
+                        $toDiff   -gt $driftAllowance
+                    ) {
+                        return $false
+                    }
+                }
+
+                return $true
+            }
+
             # Helper: Test if a word already exists based on text and timing
             function Test-WordAlreadyExists {
                 param(
                     [object]$newWord,
-                    [object[]]$existingWords
+                    [object[]]$existingWords,
+                    [double]$bandStart,
+                    [double]$bandEnd,
+                    [double]$driftAllowance,
+                    [hashtable]$prevBandByText,
+                    [hashtable]$currBandByText,
+                    [System.Collections.Generic.HashSet[int]]$claimed
                 )
-                
-                foreach ($existing in $existingWords) {
-                    # Normalize text comparison (case-insensitive, trim)
-                    $newTextNormalized = ($newWord.Text.ToLower()).Trim()
+
+                $newTextNormalized = ($newWord.Text.ToLower()).Trim()
+
+                if (-not (
+                    $newWord.From -lt $bandEnd -and
+                    $newWord.To   -gt $bandStart
+                )) {
+                    return $false
+                }
+
+                if ([string]::IsNullOrEmpty($newWord.Key)) {
+                    return $false
+                }
+
+                if (-not (
+                    Test-BandPairEvidence `
+                        $newTextNormalized `
+                        $prevBandByText `
+                        $currBandByText `
+                        $driftAllowance
+                )) {
+                    return $false
+                }
+
+                for ($idx = 0; $idx -lt $existingWords.Count; $idx++) {
+                    $existing = $existingWords[$idx]
+
                     $existingTextNormalized = ($existing.Text.ToLower()).Trim()
-                    
-                    if ($newTextNormalized -eq $existingTextNormalized) {
-                        # Check timing differences
-                        $fromDiff = [math]::Abs($newWord.From - $existing.From)
-                        $toDiff = [math]::Abs($newWord.To - $existing.To)
-                        
-                        if ($fromDiff -le 0.5 -and $toDiff -le 0.5) {
-                            return $true
+
+                    if ($newTextNormalized -ne $existingTextNormalized) {
+                        continue
+                    }
+
+                    $fromDiff = [math]::Abs($newWord.From - $existing.From)
+                    $toDiff   = [math]::Abs($newWord.To   - $existing.To)
+
+                    if (
+                        $fromDiff -le $driftAllowance -and
+                        $toDiff   -le $driftAllowance
+                    ) {
+                        if ($claimed.Contains($idx)) {
+                            continue
                         }
+                        $claimed.Add($idx) | Out-Null
+                        return $true
                     }
                 }
-                
+
                 return $false
             }
-            
+
             # Helper: Add new words avoiding duplicates based on text and timing
             function Add-NewWordsWithTiming {
                 param(
                     [object[]]$currentWords,
-                    [object[]]$finalWords
+                    [object[]]$finalWords,
+                    [double]$bandStart,
+                    [double]$bandEnd,
+                    [double]$driftAllowance,
+                    [hashtable]$prevBandByText,
+                    [hashtable]$currBandByText
                 )
-                
+
                 $result = @($finalWords)
-                
+                $claimed = New-Object 'System.Collections.Generic.HashSet[int]'
+
                 foreach ($word in $currentWords) {
-                    if (-not (Test-WordAlreadyExists $word $result)) {
+                    if (-not (
+                        Test-WordAlreadyExists `
+                            $word `
+                            $result `
+                            $bandStart `
+                            $bandEnd `
+                            $driftAllowance `
+                            $prevBandByText `
+                            $currBandByText `
+                            $claimed
+                    )) {
                         $result += $word
                     }
                 }
-                
+
                 return $result
             }
 
             # Add words based on text and timing deduplication
-            $finalWords = Add-NewWordsWithTiming $currentWords $finalWords
+            $finalWords = Add-NewWordsWithTiming `
+                $currentWords `
+                $finalWords `
+                $overlapStart `
+                $overlapEnd `
+                $driftAllowance `
+                $prevBandByText `
+                $currBandByText
 
             # Build previousOverlapMap for all words in finalWords using their absolute index
             $previousOverlapMap = @{}
