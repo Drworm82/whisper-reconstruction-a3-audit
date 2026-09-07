@@ -91,6 +91,9 @@ Write-Host ""
 
 # ------------------------------------------------------------
 # CASO A: T1, drift 0.0s — regresion minima
+# El resultado correcto contiene 13 palabras: W1 conserva sus dos
+# palabras nuevas (ocho, nueve) y W2 aporta alpha/beta/gamma; X se
+# conserva una sola vez.
 # ------------------------------------------------------------
 Write-Host "--- CASO A: T1 sin drift ---"
 
@@ -98,10 +101,10 @@ $resultA = @(Reconstruct-WhisperWindows (New-T1Windows -FinalXFrom 8.5))
 $textA = Get-Texts $resultA
 $xsA = @($resultA | Where-Object { $_.Text.Trim().ToLower() -eq 'x' })
 
-if ($resultA.Count -eq 12) {
-    Write-Host "[OK] 12 palabras"
+if ($resultA.Count -eq 13) {
+    Write-Host "[OK] 13 palabras"
 } else {
-    Write-Host ("[FAIL] {0} palabras; esperado 12" -f $resultA.Count)
+    Write-Host ("[FAIL] {0} palabras; esperado 13" -f $resultA.Count)
     $pass = $false
 }
 
@@ -144,10 +147,10 @@ if ($xsB.Count -eq 1) {
     $pass = $false
 }
 
-if ($resultB.Count -eq 12) {
-    Write-Host "[OK] 12 palabras con drift 0.3s"
+if ($resultB.Count -eq 13) {
+    Write-Host "[OK] 13 palabras con drift 0.3s"
 } else {
-    Write-Host ("[FAIL] {0} palabras con drift 0.3s; esperado 12" -f $resultB.Count)
+    Write-Host ("[FAIL] {0} palabras con drift 0.3s; esperado 13" -f $resultB.Count)
     $pass = $false
 }
 
