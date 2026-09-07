@@ -30,19 +30,18 @@ function Reconstruct-WhisperWindows {
     )
 
     $previousOverlapMap = @{}
-    if ($windows.Count -gt 1) {
-        $overlapStart = $windows[1].Start
-        $overlapEnd   = $windows[0].End
 
-        $firstOverlap = @(
+    if ($windows.Count -gt 1) {
+        $firstOverlapStart = $windows[1].Start
+        $firstOverlapEnd   = $windows[0].End
+
+        foreach ($word in @(
             $finalWords |
             Where-Object {
-                $_.From -lt $overlapEnd -and
-                $_.To   -gt $overlapStart
+                $_.From -lt $firstOverlapEnd -and
+                $_.To   -gt $firstOverlapStart
             }
-        )
-
-        foreach ($word in $firstOverlap) {
+        )) {
             for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
                 if ($finalWords[$idx].Id -eq $word.Id) {
                     $previousOverlapMap[$word.Id] = $idx
@@ -52,8 +51,9 @@ function Reconstruct-WhisperWindows {
         }
     }
 
-    # Words that are before the selected MATCH anchor can be omitted by the
-    # reconstruction, but they may be needed as anchors in a later transition.
+    # A prior MATCH may omit words that precede its selected anchor. Those
+    # omitted occurrences are retained here so a later MATCH can reuse the
+    # exact occurrence when it becomes an anchor.
     $deferredWordsByText = @{}
 
     for ($i = 1; $i -lt $windows.Count; $i++) {
@@ -206,9 +206,8 @@ function Reconstruct-WhisperWindows {
 
                 for ($idx = 0; $idx -lt $existingWords.Count; $idx++) {
                     $existing = $existingWords[$idx]
-                    $existingText = ($existing.Text.ToLower()).Trim()
 
-                    if ($text -ne $existingText) {
+                    if ($text -ne (($existing.Text.ToLower()).Trim())) {
                         continue
                     }
 
@@ -222,6 +221,7 @@ function Reconstruct-WhisperWindows {
                         if ($claimed.Contains($idx)) {
                             continue
                         }
+
                         $claimed.Add($idx) | Out-Null
                         return $true
                     }
@@ -275,7 +275,7 @@ function Reconstruct-WhisperWindows {
                     return $false
                 }
 
-                $accSorted  = @($accOccurrences | Sort-Object -Property From)
+                $accSorted  = @($accOccurrences  | Sort-Object -Property From)
                 $currSorted = @($currOccurrences | Sort-Object -Property From)
 
                 for ($k = 0; $k -lt $accSorted.Count; $k++) {
@@ -309,6 +309,7 @@ function Reconstruct-WhisperWindows {
                         if ($claimed.Contains($idx)) {
                             return $false
                         }
+
                         $claimed.Add($idx) | Out-Null
                         return $true
                     }
@@ -334,29 +335,29 @@ function Reconstruct-WhisperWindows {
                 $claimed = New-Object 'System.Collections.Generic.HashSet[int]'
 
                 foreach ($word in $currentWords) {
-                    $level1 = Test-WordAlreadyExists `
-                        $word `
-                        $result `
-                        $bandStart `
-                        $bandEnd `
-                        $driftAllowance `
-                        $prevBandByText `
-                        $currBandByText `
-                        $claimed
-
-                    if (-not $level1) {
-                        $level2 = Test-TransitiveWordAlreadyExists `
+                    if (-not (
+                        Test-WordAlreadyExists `
                             $word `
                             $result `
                             $bandStart `
                             $bandEnd `
-                            $transitiveAllowance `
+                            $driftAllowance `
                             $prevBandByText `
                             $currBandByText `
-                            $accBandByText `
                             $claimed
-
-                        if (-not $level2) {
+                    )) {
+                        if (-not (
+                            Test-TransitiveWordAlreadyExists `
+                                $word `
+                                $result `
+                                $bandStart `
+                                $bandEnd `
+                                $transitiveAllowance `
+                                $prevBandByText `
+                                $currBandByText `
+                                $accBandByText `
+                                $claimed
+                        )) {
                             $result += $word
                         }
                     }
@@ -374,6 +375,7 @@ function Reconstruct-WhisperWindows {
                     $word.To   -gt $overlapStart
                 ) {
                     $text = ($word.Text.ToLower()).Trim()
+
                     if ($accBandByText.ContainsKey($text)) {
                         $accBandByText[$text] = @($accBandByText[$text]) + $word
                     } else {
@@ -410,6 +412,8 @@ function Reconstruct-WhisperWindows {
             continue
         }
 
+        # A match can select an anchor that was deferred by an earlier MATCH.
+        # Recover it into the accumulated transcript before calculating prefix.
         $prefixCount = $null
 
         if ($previousOverlapMap.ContainsKey($matchedWord.Id)) {
@@ -425,55 +429,53 @@ function Reconstruct-WhisperWindows {
             }
         }
 
-        # A previous MATCH may have intentionally omitted this exact occurrence
-        # because it was before that match's selected anchor. Recover it only on
-        # exact text + timing evidence, then place it according to absolute time.
         if ($null -eq $prefixCount) {
             $anchorText = ($matchedWord.Text.ToLower()).Trim()
-            $candidate = $null
 
             if ($deferredWordsByText.ContainsKey($anchorText)) {
+                $candidate = $null
+
                 foreach ($deferred in @($deferredWordsByText[$anchorText])) {
-                    if (
-                        [math]::Abs($deferred.From - $matchedWord.From) -le 0.000001 -and
-                        [math]::Abs($deferred.To   - $matchedWord.To)   -le 0.000001
-                    ) {
+                    $sameFrom = [math]::Abs($deferred.From - $matchedWord.From) -le 0.000001
+                    $sameTo   = [math]::Abs($deferred.To   - $matchedWord.To)   -le 0.000001
+
+                    if ($sameFrom -and $sameTo) {
                         $candidate = $deferred
                         break
                     }
                 }
-            }
 
-            if ($null -ne $candidate) {
-                $insertAt = $finalWords.Count
+                if ($null -ne $candidate) {
+                    $insertAt = $finalWords.Count
 
-                for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
-                    if ($finalWords[$idx].From -gt $candidate.From) {
-                        $insertAt = $idx
-                        break
+                    for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
+                        if ($finalWords[$idx].From -gt $candidate.From) {
+                            $insertAt = $idx
+                            break
+                        }
                     }
-                }
 
-                if ($insertAt -eq 0) {
-                    $finalWords = @($candidate) + $finalWords
-                } elseif ($insertAt -eq $finalWords.Count) {
-                    $finalWords = @($finalWords) + $candidate
-                } else {
-                    $finalWords = @($finalWords[0..($insertAt - 1)]) + $candidate + @($finalWords[$insertAt..($finalWords.Count - 1)])
-                }
+                    if ($insertAt -eq 0) {
+                        $finalWords = @($candidate) + $finalWords
+                    } elseif ($insertAt -eq $finalWords.Count) {
+                        $finalWords = @($finalWords) + $candidate
+                    } else {
+                        $finalWords = @($finalWords[0..($insertAt - 1)]) + $candidate + @($finalWords[$insertAt..($finalWords.Count - 1)])
+                    }
 
-                $prefixCount = $insertAt
-                Write-Host "RECUPERADO ANCLA DIFERIDA: '$($candidate.Text)'"
+                    $prefixCount = $insertAt
+                    Write-Host "RECUPERADO ANCLA DIFERIDA: '$($candidate.Text)'"
 
-                $remaining = @(
-                    $deferredWordsByText[$anchorText] |
-                    Where-Object { $_.Id -ne $candidate.Id }
-                )
+                    $remaining = @(
+                        $deferredWordsByText[$anchorText] |
+                        Where-Object { $_.Id -ne $candidate.Id }
+                    )
 
-                if ($remaining.Count -eq 0) {
-                    $deferredWordsByText.Remove($anchorText) | Out-Null
-                } else {
-                    $deferredWordsByText[$anchorText] = $remaining
+                    if ($remaining.Count -eq 0) {
+                        $deferredWordsByText.Remove($anchorText) | Out-Null
+                    } else {
+                        $deferredWordsByText[$anchorText] = $remaining
+                    }
                 }
             }
         }
@@ -548,19 +550,19 @@ function Reconstruct-WhisperWindows {
             )
         }
 
-        # Store words that are omitted before the selected MATCH anchor.
+        # Preserve words before the selected MATCH as deferred candidates.
         for ($k = 0; $k -lt $match.CurrentStart; $k++) {
             $deferred = $currOverlap[$k]
-            $text = ($deferred.Text.ToLower()).Trim()
+            $deferredText = ($deferred.Text.ToLower()).Trim()
 
             if ([string]::IsNullOrEmpty($deferred.Key)) {
                 continue
             }
 
-            if ($deferredWordsByText.ContainsKey($text)) {
-                $deferredWordsByText[$text] = @($deferredWordsByText[$text]) + $deferred
+            if ($deferredWordsByText.ContainsKey($deferredText)) {
+                $deferredWordsByText[$deferredText] = @($deferredWordsByText[$deferredText]) + $deferred
             } else {
-                $deferredWordsByText[$text] = @($deferred)
+                $deferredWordsByText[$deferredText] = @($deferred)
             }
         }
 
