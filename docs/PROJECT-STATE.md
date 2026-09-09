@@ -66,6 +66,7 @@ Relevant commits:
 - `dd0c7ed` — Load whisper.cpp adapter
 - `f4752e6` — Fix whisper.cpp segment timestamp parsing
 - `94d6081` — Add persistent project operating rules
+- `8f66727` — Add persistent project state checkpoint
 
 ## 5. Reconstruction status
 
@@ -86,15 +87,46 @@ The user previously ran `Test-NoMatchThenMatch.Tests.ps1` successfully after the
 
 ## 6. Current validation status
 
-The whisper.cpp adapter has been written and the first local invocation exposed and fixed the segment timestamp parsing bug.
+### whisper.cpp adapter: validated locally through word construction
 
-**Not yet validated after `f4752e6`:**
+After `f4752e6`, the user synchronized the local branch to `8f66727` and ran the real whisper.cpp fixture locally.
+
+Conversion command:
 
 ```powershell
 $windowsCpp = Convert-WhisperCpp -Path ".\tests\fixtures\whispercpp-real-full.json"
 ```
 
-The next required validation is to run this conversion locally and inspect window/token counts and timestamps before integrating whisper.cpp further.
+Observed result:
+
+- `17` windows produced.
+- `331` total tokens produced.
+- First windows had numeric second-based boundaries: `0 -> 5.6`, `5.6 -> 13.88`, `13.88 -> 20.2`.
+
+The user then ran `Build-WhisperWords` over every converted window:
+
+```powershell
+$wordsCpp = @()
+for ($i = 0; $i -lt $windowsCpp.Count; $i++) {
+    $wordsCpp += @(Build-WhisperWords $windowsCpp[$i].Tokens $i)
+}
+```
+
+Observed result:
+
+- `279` words produced.
+- This exactly matches the previously documented experiment for this fixture.
+- Sample output showed numeric `From`/`To` timings and window-scoped word IDs, e.g. `normal 0.02 -> 0.5`, `economics 0.5 -> 1.23`, `in 1.23 -> 1.4`.
+
+Conclusion for this phase:
+
+`whisper.cpp -ojf JSON -> Convert-WhisperCpp -> Build-WhisperWords` is locally validated against the real 125-second fixture at the observed structural level.
+
+This does **not** yet validate the full overlapping-window reconstruction path or five-hour continuous operation.
+
+### Local synchronization note
+
+The initial `git pull origin reconstruction-fixes` was blocked because a pre-existing untracked local `AGENTS.md` would have been overwritten by the tracked repository version. The local file was moved to `AGENTS.local-backup.md`, the pull then completed as a fast-forward to `8f66727`, and no project source code was changed during this resolution.
 
 ## 7. Important constraints
 
@@ -108,8 +140,6 @@ The next required validation is to run this conversion locally and inspect windo
 
 ## 8. Immediate next step
 
-1. Pull the latest `reconstruction-fixes` branch locally.
-2. Reload the project.
-3. Run `Convert-WhisperCpp` against `tests/fixtures/whispercpp-real-full.json`.
-4. Record the result.
-5. Only after successful conversion, test the resulting windows through `Build-WhisperWords` and then the reconstruction path.
+1. Validate the converted whisper.cpp windows through the existing windowing/reconstruction path.
+2. Compare the resulting behavior against the established reconstruction invariants and regression expectations.
+3. Only after successful reconstruction validation, evaluate what is still required for continuous real-time processing and five-hour course operation.
