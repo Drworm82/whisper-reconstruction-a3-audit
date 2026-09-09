@@ -175,7 +175,7 @@ Documentation commits:
 
 - `771947f` — Document direct audio capture and OBS decision
 - `a70ea51` — Update project state with audio capture findings
-- `9a0c9f2` — Correct documented whisper.cpp control-token regex
+- `1df89d3` — Correct documented whisper.cpp control-token regex
 
 ## 7. Local synchronization note
 
