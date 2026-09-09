@@ -56,7 +56,7 @@ Responsibilities:
 
 ### Control-token filtering fix
 
-The adapter initially used the incorrect pattern `^\[_.*_\]$`. Real whisper.cpp control tokens such as `[_TT_280]` do not contain an underscore immediately before the closing bracket, so that pattern failed to match them. The adapter was corrected to `^\[_.*\]`.
+The adapter initially used the incorrect pattern `^\[_.*_\]$`. Real whisper.cpp control tokens such as `[_TT_280]` do not contain an underscore immediately before the closing bracket, so that pattern failed to match them. The adapter was corrected to `^\[_.*\]$`.
 
 Commit:
 
@@ -171,9 +171,11 @@ These are research findings, not yet implementation validation. No measured end-
 
 The full investigation is documented in `docs/AUDIO-CAPTURE-ARCHITECTURE.md`.
 
-Documentation commit:
+Documentation commits:
 
 - `771947f` — Document direct audio capture and OBS decision
+- `a70ea51` — Update project state with audio capture findings
+- `9a0c9f2` — Correct documented whisper.cpp control-token regex
 
 ## 7. Local synchronization note
 
