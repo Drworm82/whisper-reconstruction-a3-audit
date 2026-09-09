@@ -4,14 +4,14 @@
 # Adapts whisper.cpp -ojf JSON to the token/window shape expected
 # by the existing reconstruction pipeline.
 #
-# whisper.cpp stores token timestamps in milliseconds under
-# offsets.from / offsets.to. The reconstruction pipeline uses
-# seconds, matching Convert-WhisperX.
+# whisper.cpp stores segment timestamps as formatted strings and
+# token timestamps in milliseconds under offsets.from / offsets.to.
+# The reconstruction pipeline uses seconds, matching Convert-WhisperX.
 #
-# Zero-duration [_TT_nnn] and [_BEG_] control tokens are ignored.
-# All other token text, including leading whitespace, is preserved
-# because Build-WhisperWords uses leading whitespace to detect word
-# boundaries.
+# Zero-duration control/timestamp tokens such as [_BEG_] and
+# [_TT_nnn] are ignored. All other token text, including leading
+# whitespace, is preserved because Build-WhisperWords uses leading
+# whitespace to detect word boundaries.
 # ============================================================
 
 function Convert-WhisperCpp {
@@ -48,9 +48,30 @@ function Convert-WhisperCpp {
         throw "Invalid whisper.cpp JSON: 'transcription' is empty."
     }
 
+    function Convert-WhisperCppTimestamp {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$Value,
+
+            [Parameter(Mandatory = $true)]
+            [string]$Context
+        )
+
+        if ($Value -notmatch '^(\d+):([0-5]\d):([0-5]\d)[,\.]([0-9]{3})$') {
+            throw "Invalid whisper.cpp timestamp '$Value' in $Context."
+        }
+
+        $hours = [int]$Matches[1]
+        $minutes = [int]$Matches[2]
+        $seconds = [int]$Matches[3]
+        $milliseconds = [int]$Matches[4]
+
+        return ($hours * 3600.0) + ($minutes * 60.0) + $seconds + ($milliseconds / 1000.0)
+    }
+
     $windows = @()
 
-    foreach ($segment in $data.transcription) {
+    foreach ($segment in @($data.transcription)) {
         if (-not ($segment.PSObject.Properties.Match("timestamps").Count)) {
             throw "Invalid whisper.cpp segment: missing 'timestamps'."
         }
@@ -63,6 +84,13 @@ function Convert-WhisperCpp {
 
         if ($null -eq $segmentFrom -or $null -eq $segmentTo) {
             throw "Invalid whisper.cpp segment: missing timestamp values."
+        }
+
+        $startSeconds = Convert-WhisperCppTimestamp -Value ([string]$segmentFrom) -Context "segment start"
+        $endSeconds = Convert-WhisperCppTimestamp -Value ([string]$segmentTo) -Context "segment end"
+
+        if ($endSeconds -lt $startSeconds) {
+            throw "Invalid whisper.cpp segment timing: end before start."
         }
 
         $tokens = @()
@@ -109,16 +137,9 @@ function Convert-WhisperCpp {
             continue
         }
 
-        $startMs = [int]$segmentFrom
-        $endMs = [int]$segmentTo
-
-        if ($endMs -lt $startMs) {
-            throw "Invalid whisper.cpp segment timing: end before start."
-        }
-
         $windows += [PSCustomObject]@{
-            Start  = $startMs / 1000.0
-            End    = $endMs / 1000.0
+            Start  = $startSeconds
+            End    = $endSeconds
             Tokens = @($tokens)
         }
     }
