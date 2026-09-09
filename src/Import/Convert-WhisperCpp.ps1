@@ -115,7 +115,7 @@ function Convert-WhisperCpp {
 
             # whisper.cpp emits control/timestamp tokens such as
             # [_BEG_] and [_TT_280]. They carry no lexical content.
-            if ($trimmed -match '^\[_.*_\]$') {
+            if ($trimmed -match '^\[_.*\]$') {
                 continue
             }
 
