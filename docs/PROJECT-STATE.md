@@ -58,7 +58,7 @@ The adapter initially used the incorrect pattern `^\[_.*_\]$`. Real whisper.cpp 
 
 Commit:
 
-- `cc4bfe9` — Fix whisper.cpp control token filtering
+- `ce7a64f` — Fix whisper.cpp control token filtering
 
 No changes were made to `Build-WhisperWords.ps1`, `New-WhisperWindows.ps1`, or `Reconstruct-WhisperWindows.ps1` for this fix.
 
@@ -93,7 +93,7 @@ The user previously ran `Test-NoMatchThenMatch.Tests.ps1` successfully after the
 
 ### whisper.cpp adapter: locally validated through overlapping reconstruction
 
-The real whisper.cpp fixture was re-run after commit `cc4bfe9`.
+The real whisper.cpp fixture was re-run after commit `ce7a64f`.
 
 Fresh conversion:
 
@@ -157,6 +157,8 @@ This does **not** yet validate real-time streaming, sustained five-hour operatio
 
 The initial `git pull origin reconstruction-fixes` was blocked because a pre-existing untracked local `AGENTS.md` would have been overwritten by the tracked repository version. The local file was moved to `AGENTS.local-backup.md`, the pull then completed as a fast-forward to `8f66727`, and no project source code was changed during this resolution.
 
+The later documentation update was rebased locally and the resulting code commit became `ce7a64f`; that commit was pushed to `origin/reconstruction-fixes` successfully.
+
 ## 7. Important constraints
 
 - Do not modify `Build-WhisperWords.ps1` merely to accommodate whisper.cpp input.
@@ -169,6 +171,6 @@ The initial `git pull origin reconstruction-fixes` was blocked because a pre-exi
 
 ## 8. Immediate next step
 
-1. Synchronize the documented adapter fix and validation results with the local branch.
-2. Verify repository state and remote synchronization without staging unrelated untracked artifacts.
-3. Continue comparing the whisper.cpp path against established reconstruction invariants before evaluating real-time and five-hour operation requirements.
+1. Keep `reconstruction-fixes` synchronized with the remote branch.
+2. Continue comparing the whisper.cpp path against established reconstruction invariants before evaluating real-time and five-hour operation requirements.
+3. Add or run a focused regression test for whisper.cpp control-token filtering if the existing test suite does not already cover it.
