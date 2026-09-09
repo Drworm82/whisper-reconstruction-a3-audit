@@ -25,14 +25,13 @@ The ASR/import boundary is intentionally separated from reconstruction logic.
 - Installed at `C:\whisper.cpp` in the user's Windows environment.
 - GPU: AMD Radeon RX 6600 XT.
 - Backend observed: Vulkan.
-- Model tested: `ggml-base.en.bin`.
+- Model tested: `ggml-base.base.en.bin`.
 - Real test audio: `tests/fixtures/real-course-test.wav`.
 - Duration: approximately 125 seconds.
 - `whisper-cli.exe -ojf` produced token-level JSON timestamps.
 - Token timestamps are available through `offsets.from` / `offsets.to` in milliseconds.
 - Segment timestamps are formatted strings such as `00:00:00,000`.
-- A real 125-second test produced 331 lexical/control-filtered token records before word grouping and 279 words after `Build-WhisperWords` in the current experiment.
-- The JSON contained 17 `[_TT_nnn]` tokens in the inspected real file; all had zero duration and no additional text. It also contained `[_BEG_]` control tokens.
+- The real fixture contains 331 token records in the whisper.cpp JSON, including 17 zero-duration `[_TT_nnn]` control/timestamp tokens inspected during adapter validation.
 - These control/timestamp tokens must be excluded by the whisper.cpp adapter.
 
 ### WhisperX
@@ -41,7 +40,7 @@ WhisperX remains in the repository and has not been removed. Its existing adapte
 
 ## 4. Current whisper.cpp adapter
 
-`src/Import/Convert-WhisperCpp.ps1` was added as the boundary adapter.
+`src/Import/Convert-WhisperCpp.ps1` is the boundary adapter.
 
 Responsibilities:
 
@@ -50,15 +49,20 @@ Responsibilities:
 - Convert segment timestamp strings to seconds.
 - Convert token offsets from milliseconds to seconds.
 - Preserve token leading whitespace because `Build-WhisperWords` uses it for word boundaries.
-- Drop control/timestamp tokens matching `^\[_.*_\]$`.
+- Drop control/timestamp tokens matching `^\[_.*\]$`.
 - Reject inverted timestamps.
 
-Initial implementation failure:
+### Control-token filtering fix
 
-- The first implementation attempted `[int]` conversion of segment timestamps.
-- Real whisper.cpp JSON uses strings such as `00:00:00,000` for segment timestamps.
-- This caused the local error: `No se puede convertir el valor "00:00:00,000" al tipo "System.Int32"`.
-- Fixed by adding explicit timestamp parsing.
+The adapter initially used the incorrect pattern `^\[_.*_\]$`. Real whisper.cpp control tokens such as `[_TT_280]` do not contain an underscore immediately before the closing bracket, so that pattern failed to match them. The adapter was corrected to `^\[_.*\]$`.
+
+Commit:
+
+- `cc4bfe9` — Fix whisper.cpp control token filtering
+
+No changes were made to `Build-WhisperWords.ps1`, `New-WhisperWindows.ps1`, or `Reconstruct-WhisperWindows.ps1` for this fix.
+
+### Earlier adapter work
 
 Relevant commits:
 
@@ -87,42 +91,67 @@ The user previously ran `Test-NoMatchThenMatch.Tests.ps1` successfully after the
 
 ## 6. Current validation status
 
-### whisper.cpp adapter: validated locally through word construction
+### whisper.cpp adapter: locally validated through overlapping reconstruction
 
-After `f4752e6`, the user synchronized the local branch to `8f66727` and ran the real whisper.cpp fixture locally.
+The real whisper.cpp fixture was re-run after commit `cc4bfe9`.
 
-Conversion command:
+Fresh conversion:
 
 ```powershell
-$windowsCpp = Convert-WhisperCpp -Path ".\tests\fixtures\whispercpp-real-full.json"
+$windowsCppClean = @(Convert-WhisperCpp -Path ".\tests\fixtures\whispercpp-real-full.json")
 ```
 
 Observed result:
 
-- `17` windows produced.
-- `331` total tokens produced.
-- First windows had numeric second-based boundaries: `0 -> 5.6`, `5.6 -> 13.88`, `13.88 -> 20.2`.
+- `17` native windows produced.
+- `0` control tokens remained in the converted window token collections when checked against `^\[_.*\]$`.
 
-The user then ran `Build-WhisperWords` over every converted window:
+Word construction:
 
 ```powershell
-$wordsCpp = @()
-for ($i = 0; $i -lt $windowsCpp.Count; $i++) {
-    $wordsCpp += @(Build-WhisperWords $windowsCpp[$i].Tokens $i)
+$wordsCppClean = @()
+for ($i = 0; $i -lt $windowsCppClean.Count; $i++) {
+    $wordsCppClean += @(Build-WhisperWords $windowsCppClean[$i].Tokens $i)
 }
 ```
 
 Observed result:
 
-- `279` words produced.
-- This exactly matches the previously documented experiment for this fixture.
-- Sample output showed numeric `From`/`To` timings and window-scoped word IDs, e.g. `normal 0.02 -> 0.5`, `economics 0.5 -> 1.23`, `in 1.23 -> 1.4`.
+- `274` words produced.
+- `0` words contained `[_TT_nnn]` markers.
 
-Conclusion for this phase:
+This is a correction to the earlier `279`-word observation: the earlier count included the 17 control tokens because the adapter's original regular expression failed to remove them.
 
-`whisper.cpp -ojf JSON -> Convert-WhisperCpp -> Build-WhisperWords` is locally validated against the real 125-second fixture at the observed structural level.
+Overlapping window construction used the already-established test parameters:
 
-This does **not** yet validate the full overlapping-window reconstruction path or five-hour continuous operation.
+```powershell
+$overlapCppClean = @(New-WhisperWindows -Words $wordsCppClean -WindowDurationSeconds 10 -OverlapDurationSeconds 4)
+```
+
+Observed result:
+
+- `21` overlapping windows produced.
+
+Reconstruction:
+
+```powershell
+$resultCppClean = @(Reconstruct-WhisperWindows $overlapCppClean)
+```
+
+Observed result:
+
+- `274` reconstructed words.
+- `274` input words.
+- `0` words lost by count comparison.
+- One `SIN MATCH` was observed at the `96.02s -> 102.02s` transition.
+- Final reconstructed sequence had `0` temporal-order violations (`From` never decreased).
+- Final reconstructed sequence contained `0` `[_TT_nnn]` markers.
+
+Conclusion:
+
+`whisper.cpp -ojf JSON -> Convert-WhisperCpp -> Build-WhisperWords -> New-WhisperWindows (10s/4s) -> Reconstruct-WhisperWindows` is locally validated against the real approximately 125-second fixture at the current structural/reconstruction level.
+
+This does **not** yet validate real-time streaming, sustained five-hour operation, or production-scale performance.
 
 ### Local synchronization note
 
@@ -140,6 +169,6 @@ The initial `git pull origin reconstruction-fixes` was blocked because a pre-exi
 
 ## 8. Immediate next step
 
-1. Validate the converted whisper.cpp windows through the existing windowing/reconstruction path.
-2. Compare the resulting behavior against the established reconstruction invariants and regression expectations.
-3. Only after successful reconstruction validation, evaluate what is still required for continuous real-time processing and five-hour course operation.
+1. Synchronize the documented adapter fix and validation results with the local branch.
+2. Verify repository state and remote synchronization without staging unrelated untracked artifacts.
+3. Continue comparing the whisper.cpp path against established reconstruction invariants before evaluating real-time and five-hour operation requirements.
