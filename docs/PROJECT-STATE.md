@@ -4,7 +4,7 @@
 
 **Repository:** `Drworm82/whisper-reconstruction-a3-audit`
 
-**Last documented update:** 2026-09-08
+**Last documented update:** 2026-09-09
 
 ## 1. Current objective
 
@@ -14,9 +14,11 @@ Build a robust reconstruction pipeline for continuous transcription from overlap
 
 Current conceptual flow:
 
-`audio -> ASR -> import adapter -> Build-WhisperWords -> overlapping windows -> alignment/reconstruction -> continuous transcript -> question/context stage`
+`audio capture -> ASR -> import adapter -> Build-WhisperWords -> overlapping windows -> alignment/reconstruction -> continuous transcript -> question/context stage`
 
 The ASR/import boundary is intentionally separated from reconstruction logic.
+
+Audio capture is now being evaluated as a separate subsystem. OBS is not yet considered a mandatory dependency. See `docs/AUDIO-CAPTURE-ARCHITECTURE.md` for the current investigation and decision status.
 
 ## 3. ASR investigation
 
@@ -54,7 +56,7 @@ Responsibilities:
 
 ### Control-token filtering fix
 
-The adapter initially used the incorrect pattern `^\[_.*_\]$`. Real whisper.cpp control tokens such as `[_TT_280]` do not contain an underscore immediately before the closing bracket, so that pattern failed to match them. The adapter was corrected to `^\[_.*\]$`.
+The adapter initially used the incorrect pattern `^\[_.*_\]$`. Real whisper.cpp control tokens such as `[_TT_280]` do not contain an underscore immediately before the closing bracket, so that pattern failed to match them. The adapter was corrected to `^\[_.*\]`.
 
 Commit:
 
@@ -98,13 +100,13 @@ The real whisper.cpp fixture was re-run after commit `ce7a64f`.
 Fresh conversion:
 
 ```powershell
-$windowsCppClean = @(Convert-WhisperCpp -Path ".\tests\fixtures\whispercpp-real-full.json")
+$windowsCppClean = @(Convert-WhisperCpp -Path ".\\tests\\fixtures\\whispercpp-real-full.json")
 ```
 
 Observed result:
 
 - `17` native windows produced.
-- `0` control tokens remained in the converted window token collections when checked against `^\[_.*\]$`.
+- `0` control tokens remained in the converted window token collections when checked against `^\\[_.*\\]$`.
 
 Word construction:
 
@@ -119,8 +121,6 @@ Observed result:
 
 - `274` words produced.
 - `0` words contained `[_TT_nnn]` markers.
-
-This is a correction to the earlier `279`-word observation: the earlier count included the 17 control tokens because the adapter's original regular expression failed to remove them.
 
 Overlapping window construction used the already-established test parameters:
 
@@ -153,13 +153,35 @@ Conclusion:
 
 This does **not** yet validate real-time streaming, sustained five-hour operation, or production-scale performance.
 
-### Local synchronization note
+### Audio capture investigation: OBS is not currently mandatory
+
+The product being used as the functional reference is ParakeetAI at `https://www.parakeet-ai.com/`. Its public product description establishes real-time desktop transcription/assistance behavior, but does not establish which Windows capture API it uses internally.
+
+The current technical investigation found:
+
+- Windows provides native WASAPI loopback capture of rendered output audio; this does not require a third-party virtual audio driver.
+- NAudio exposes WASAPI loopback capture through its recorder API, allowing captured audio to be delivered to application code rather than waiting for a completed recording file.
+- A two-minute recording block is therefore not an inherent two-minute ASR latency. Such latency would depend on a file-based integration that waits for the block to complete.
+- The session recording requirement and low-latency ASR requirement can be separated by fanning out the captured stream: one consumer persists the full session and another feeds a short ASR buffer.
+- OBS remains useful as an optional diagnostic/reference recorder, but it is not currently justified as a mandatory intermediary between Windows audio and whisper.cpp.
+- Windows also provides Application Loopback for process-specific audio capture; this is a future option, not yet the selected design.
+- Device-change/reconnection behavior remains an explicit proof-of-concept requirement.
+
+These are research findings, not yet implementation validation. No measured end-to-end capture latency has been established.
+
+The full investigation is documented in `docs/AUDIO-CAPTURE-ARCHITECTURE.md`.
+
+Documentation commit:
+
+- `771947f` — Document direct audio capture and OBS decision
+
+## 7. Local synchronization note
 
 The initial `git pull origin reconstruction-fixes` was blocked because a pre-existing untracked local `AGENTS.md` would have been overwritten by the tracked repository version. The local file was moved to `AGENTS.local-backup.md`, the pull then completed as a fast-forward to `8f66727`, and no project source code was changed during this resolution.
 
 The later documentation update was rebased locally and the resulting code commit became `ce7a64f`; that commit was pushed to `origin/reconstruction-fixes` successfully.
 
-## 7. Important constraints
+## 8. Important constraints
 
 - Do not modify `Build-WhisperWords.ps1` merely to accommodate whisper.cpp input.
 - Do not modify `Reconstruct-WhisperWindows.ps1` merely to accommodate whisper.cpp input.
@@ -168,9 +190,16 @@ The later documentation update was rebased locally and the resulting code commit
 - Do not invent a test runner. Inspect `tests/` and run the actual scripts present.
 - Do not delete untracked project artifacts without a specific reason and user approval.
 - Every meaningful change must be documented and committed.
+- Do not treat OBS as mandatory until the direct WASAPI/NAudio proof of concept has been evaluated.
+- Keep the complete session recording independent of live ASR/reconstruction/AI success during experimental use.
 
-## 8. Immediate next step
+## 9. Immediate next step
 
-1. Keep `reconstruction-fixes` synchronized with the remote branch.
-2. Continue comparing the whisper.cpp path against established reconstruction invariants before evaluating real-time and five-hour operation requirements.
-3. Add or run a focused regression test for whisper.cpp control-token filtering if the existing test suite does not already cover it.
+1. Build a small NAudio + WASAPI Loopback proof of concept.
+2. Persist the complete captured session while simultaneously exposing PCM data to a short ASR buffer.
+3. Measure capture-to-text latency with controlled audio rather than inferring latency from recording block size.
+4. Test behavior when the Windows default playback device changes or disappears.
+5. Test sustained capture and simultaneous recording/ASR under a realistic class/meeting workload.
+6. After the POC, decide whether OBS has any continuing production role and document the final capture architecture.
+7. Continue comparing the whisper.cpp path against established reconstruction invariants before evaluating five-hour operation requirements.
+8. Add or run a focused regression test for whisper.cpp control-token filtering if the existing test suite does not already cover it.
