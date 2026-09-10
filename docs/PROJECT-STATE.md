@@ -205,3 +205,26 @@ The later documentation update was rebased locally and the resulting code commit
 6. Only after multi-window reconstruction is validated, proceed to real bounded inference-queue integration.
 7. Keep watchdog, overflow policy, latency measurement, device-change handling, and long-duration soak testing as separate validation steps.
 8. Do not finalize window geometry beyond the current POC parameters until scheduler and reconstruction behavior have been evaluated together.
+
+### POC5 result — scheduler + whisper-server structural integration
+
+The scheduler-generated windows `0-5s`, `4-9s`, and `8-13s` were processed sequentially through the persistent whisper-server, converted with `Convert-WhisperServer`, normalized with `Build-WhisperWords`, and evaluated through `Reconstruct-WhisperWindows`.
+
+Observed result:
+
+- `17` normalized token units across the three windows.
+- `13` constructed words.
+- `13` reconstructed words.
+- `0` words lost by count.
+- `13` unique reconstructed IDs.
+- `0` duplicate IDs.
+- Temporal-order check: `True`.
+- Both reconstruction transitions were `SIN MATCH`.
+
+The two `SIN MATCH` results are not considered evidence of a reconstruction defect. The actual ASR outputs did not contain sufficient common lexical content in the physical overlap intervals to form a match: window 0 ended with a music marker around `4-5s` while window 1 began with punctuation/`upbeat`, and window 1's recognized content ended around `6.57s`, leaving no recognized content in the `8-9s` overlap with window 2.
+
+**Status:** POC5 structural integration **PASS**. Real overlap MATCH/deduplication with repeated speech remains **NOT YET VALIDATED**.
+
+Detailed results are documented in `docs/POC5-SCHEDULER-WHISPER-SERVER-INTEGRATION-RESULTS-2026-09-09.md`.
+
+Next step remains bounded inference-queue integration, with watchdog, overflow policy, latency measurement, device-change handling, and long-duration soak testing kept as separate validation concerns.
