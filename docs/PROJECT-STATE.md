@@ -24,7 +24,7 @@ Audio capture is now being evaluated as a separate subsystem. OBS is not yet con
 
 ### whisper.cpp
 
-- Installed at `C:\\whisper.cpp` in the user's Windows environment.
+- Installed at `C:\whisper.cpp` in the user's Windows environment.
 - GPU: AMD Radeon RX 6600 XT.
 - Backend observed: Vulkan.
 - Model tested: `ggml-base.en.bin`.
@@ -51,12 +51,12 @@ Responsibilities:
 - Convert segment timestamp strings to seconds.
 - Convert token offsets from milliseconds to seconds.
 - Preserve token leading whitespace because `Build-WhisperWords` uses it for word boundaries.
-- Drop control/timestamp tokens matching `^\\[_.*\\]$`.
+- Drop control/timestamp tokens matching `^\[_.*\]$`.
 - Reject inverted timestamps.
 
 ### Control-token filtering fix
 
-The adapter initially used the incorrect pattern `^\\[_.*_\\]$`. Real whisper.cpp control tokens such as `[_TT_280]` do not contain an underscore immediately before the closing bracket, so that pattern failed to match them. The adapter was corrected to `^\\[_.*\\]$`.
+The adapter initially used the incorrect pattern `^\[_.*_\]$`. Real whisper.cpp control tokens such as `[_TT_280]` do not contain an underscore immediately before the closing bracket, so that pattern failed to match them. The adapter was corrected to `^\[_.*\]$`.
 
 Commit:
 
@@ -100,13 +100,13 @@ The real whisper.cpp fixture was re-run after commit `ce7a64f`.
 Fresh conversion:
 
 ```powershell
-$windowsCppClean = @(Convert-WhisperCpp -Path ".\\tests\\fixtures\\whispercpp-real-full.json")
+$windowsCppClean = @(Convert-WhisperCpp -Path ".\tests\fixtures\whispercpp-real-full.json")
 ```
 
 Observed result:
 
 - `17` native windows produced.
-- `0` control tokens remained in the converted window token collections when checked against `^\\[_.*\\]$`.
+- `0` control tokens remained in the converted window token collections when checked against `^\[_.*\]$`.
 
 Word construction:
 
@@ -197,65 +197,50 @@ The later documentation update was rebased locally and the resulting code commit
 
 ## 9. Immediate next step
 
-**POC7 — Paso 3: real integration with whisper-server**
+**POC7 — Paso 4: integrate verbose_json with Convert-WhisperServer and Build-WhisperWords**
 
-The POC7 Paso 1 scheduler and Paso 2 bounded inference queue have been implemented and validated independently within the POC7 end-to-end harness.
+POC7 Paso 1, Paso 2, and Paso 3 have now been implemented and validated within the POC7 end-to-end harness.
 
 Current validated flow:
 
-`WASAPI Loopback -> Ring Buffer -> Scheduler -> Bounded Inference Queue -> sequential consumer`
+`WASAPI Loopback -> Ring Buffer -> Scheduler -> Bounded Inference Queue -> sequential consumer -> persistent whisper-server -> verbose_json`
 
-POC7 Paso 2 validation:
+POC7 Paso 3 validation:
 
-- Test duration: `15 s`.
+- Test duration requested: `15 s`.
+- Second validation run captured `14.960 s`.
 - Window geometry: `5 s` window, `1 s` overlap, `4 s` step.
 - Queue capacity: `3` jobs.
-- Simulated inference time: `500 ms/job`.
 - Jobs produced: `3`.
 - Jobs processed: `3`.
 - Jobs discarded: `0`.
 - Jobs pending: `0`.
 - Maximum queue depth: `1`.
-- Accounting: `3 = 3 + 0 + 0` — `OK`.
-- Capacity: `1 <= 3` — `OK`.
+- Inferencias exitosas: `3`.
+- Inferencias fallidas: `0`.
+- HTTP status: `200` for all three processed jobs.
+- `verbose_json`: structurally valid for all three processed jobs (`task`, `language`, `segments`, `text`).
+- ASR output counts: `13`, `16`, and `7` word units across jobs `#00`, `#01`, and `#02` respectively.
 - Processing order: `#00`, `#01`, `#02`.
-- Clean termination: scheduler and consumer both completed.
+- Capture ring-buffer dropped frames: `0`.
+- Scheduler and consumer terminated correctly.
+- Server remained available after testing (`GET /` -> `HTTP 200`).
 
-A termination issue was found during an earlier Paso 2 execution: the consumer could remain blocked in `SemaphoreSlim.WaitAsync()` after `RecordingStopped`. The `RecordingStopped` handler was corrected to release `queueSignal`, after which the complete run terminated correctly.
+**Status:** POC7 Paso 3 — **PASS** under the observed non-saturated load.
 
-**Status:** POC7 Paso 2 — **PASS** under non-saturated load.
+A first Paso 3 run produced only `10.720 s` of captured audio and two windows. That run was retained as evidence but not used as the final validation because it did not reach the expected temporal coverage. A second run reached `14.960 s` and produced all three expected windows; that run is the validation basis for the PASS.
 
-Important limitation: the Paso 2 execution did not saturate the queue. `DropOldest` was not exercised by actual overflow in this run and remains an experimental policy, not a production decision.
+The implementation added real HTTP inference using the persistent whisper-server. Each scheduler window is wrapped as WAV audio in memory and sent as `multipart/form-data` with `temperature=0.0` and `response_format=verbose_json`. Responses are checked for successful HTTP status and minimum `verbose_json` structure before a job is classified as successful.
 
-Detailed Paso 2 results are documented in `docs/POC7-PASO2-BOUNDED-INFERENCE-QUEUE-RESULTS-2026-09-10.md`.
+Important limitation: the queue was not saturated during Paso 3; `DropOldest` therefore was not exercised by actual overflow and remains experimental rather than a production decision. The step also does not validate continuous reconstruction, real MATCH/DEDUP across repeated speech, watchdog/restart, device reconnection, end-to-end latency target, long-duration soak, final window geometry, or LLM integration.
 
-### POC7 Paso 3 scope
+Detailed Paso 3 results are documented in:
 
-Next, connect the bounded inference queue to the already validated persistent `whisper-server` instead of the simulated consumer.
-
-Target flow:
-
-`WASAPI Loopback -> Ring Buffer -> Scheduler -> Bounded Inference Queue -> persistent whisper-server -> verbose_json -> Convert-WhisperServer -> Build-WhisperWords`
-
-The immediate objective is to validate the actual hand-off from a queued scheduler window to real whisper-server inference and back into normalized ASR data.
-
-The following remain outside the immediate Paso 3 scope:
-
-- continuous realtime reconstruction;
-- final end-to-end latency target;
-- watchdog/restart behavior;
-- sustained saturation and definitive overflow policy;
-- device-change/reconnection;
-- long-duration soak testing;
-- LLM/question detection/context assistance;
-- final production window geometry.
-
-POC7 is therefore still an experimental integration sequence. The system is **not** yet validated as continuous realtime and the MVP is **not** declared finished.
+- `docs/POC7-PASO3-WHISPER-SERVER-INTEGRATION-RESULTS-2026-09-10.md`
 
 ## 10. POC4 result - WASAPI Loopback + ring buffer + audio scheduler
 
-POC4 validated the audio capture/scheduler layer using WASAPI Loopback, a 20-second
-ring buffer, and overlapping scheduler windows.
+POC4 validated the audio capture/scheduler layer using WASAPI Loopback, a 20-second ring buffer, and overlapping scheduler windows.
 
 Configuration:
 
@@ -283,15 +268,11 @@ Observed result:
 - Ring-buffer dropped frames: `0`.
 - All three window sizes: `OK`.
 
-The scheduler termination was corrected to use the actual WASAPI `RecordingStopped`
-event/state rather than requiring exactly 15 seconds of captured frames.
+The scheduler termination was corrected to use the actual WASAPI `RecordingStopped` event/state rather than requiring exactly 15 seconds of captured frames.
 
 **Status:** POC4 WASAPI scheduler **PASS**.
 
-The POC validates capture, ring-buffer retention, overlapping window generation,
-expected window sizing, and clean termination. It does not validate ASR inference,
-inference-queue saturation, continuous reconstruction, watchdog behavior, or
-long-duration operation.
+The POC validates capture, ring-buffer retention, overlapping window generation, expected window sizing, and clean termination. It does not validate ASR inference, inference-queue saturation, continuous reconstruction, watchdog behavior, or long-duration operation.
 
 Commit:
 
@@ -558,6 +539,10 @@ Commit:
 
 - `6d20912` — Add POC7 bounded inference queue
 
-**Siguiente paso:** POC7 Paso 3 — conectar la bounded inference queue con el `whisper-server` persistente real y validar el transporte de una ventana de audio real hacia `verbose_json` y de regreso hacia `Convert-WhisperServer` / `Build-WhisperWords`.
+**Status update:** POC7 Paso 3 — **PASS**.
+
+La documentación detallada del Paso 3 está en:
+
+- `docs/POC7-PASO3-WHISPER-SERVER-INTEGRATION-RESULTS-2026-09-10.md`
 
 No se modifica todavía la geometría experimental de ventanas ni se establece una política definitiva de overflow.
