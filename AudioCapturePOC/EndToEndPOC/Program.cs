@@ -1,4 +1,4 @@
-using NAudio.Wave;
+ï»¿using NAudio.Wave;
 
 const int TestDurationSeconds = 15;
 const double WindowDurationSeconds = 5.0;
@@ -6,8 +6,11 @@ const double OverlapDurationSeconds = 1.0;
 const double StepSeconds = WindowDurationSeconds - OverlapDurationSeconds;
 const double RingBufferDurationSeconds = 20.0;
 
+const int QueueCapacity = 3;
+const int SimulatedInferenceMs = 500;
+
 Console.WriteLine("POC 7 - End-to-End Integration");
-Console.WriteLine("Paso 1 - WASAPI Loopback + Ring Buffer + Scheduler");
+Console.WriteLine("Paso 2 - Scheduler + Bounded Inference Queue");
 Console.WriteLine();
 
 using var capture = new WasapiLoopbackCapture();
@@ -32,8 +35,17 @@ var captureStopped = false;
 
 long nextWindowStartFrame = 0;
 
-var generatedWindows =
-    new List<(int Index, long StartFrame, long EndFrame, byte[] Audio)>();
+var queue = new Queue<InferenceJob>();
+var queueLock = new object();
+var queueSignal = new SemaphoreSlim(0);
+
+var producedJobs = 0;
+var processedJobs = 0;
+var droppedJobs = 0;
+var maxQueueDepth = 0;
+
+var droppedJobIndexes = new List<int>();
+var processedJobIndexes = new List<int>();
 
 Console.WriteLine($"Formato: {capture.WaveFormat}");
 Console.WriteLine($"Sample rate: {sampleRate}");
@@ -45,6 +57,10 @@ Console.WriteLine(
     $"Ventana: {WindowDurationSeconds:F1}s | " +
     $"Solapamiento: {OverlapDurationSeconds:F1}s | " +
     $"Paso: {StepSeconds:F1}s");
+Console.WriteLine();
+Console.WriteLine($"Cola: capacidad {QueueCapacity}");
+Console.WriteLine($"Inferencia simulada: {SimulatedInferenceMs} ms");
+Console.WriteLine("Overflow experimental: DropOldest");
 Console.WriteLine();
 
 void WriteToRingBuffer(byte[] source, int bytesRecorded)
@@ -96,7 +112,7 @@ void WriteToRingBuffer(byte[] source, int bytesRecorded)
                 sourceOffset,
                 ringBuffer,
                 (int)ringOffset,
-                (int)bytesToCopy);
+                bytesToCopy);
 
             sourceOffset += bytesToCopy;
             remainingBytes -= bytesToCopy;
@@ -169,6 +185,51 @@ bool TryExtractWindow(
     }
 }
 
+bool TryEnqueue(InferenceJob job)
+{
+    InferenceJob? droppedJob = null;
+    int currentDepth;
+
+    lock (queueLock)
+    {
+        producedJobs++;
+
+        if (queue.Count >= QueueCapacity)
+        {
+            droppedJob = queue.Dequeue();
+            droppedJobs++;
+            droppedJobIndexes.Add(droppedJob.WindowIndex);
+        }
+
+        queue.Enqueue(job);
+
+        currentDepth = queue.Count;
+
+        if (currentDepth > maxQueueDepth)
+        {
+            maxQueueDepth = currentDepth;
+        }
+    }
+
+    if (droppedJob != null)
+    {
+        Console.WriteLine(
+            $"COLA DESCARTA #{droppedJob.WindowIndex:D2} " +
+            $"â†’ entra #{job.WindowIndex:D2} | " +
+            $"cola={currentDepth}");
+    }
+    else
+    {
+        Console.WriteLine(
+            $"COLA PRODUCE #{job.WindowIndex:D2} | " +
+            $"cola={currentDepth}");
+    }
+
+    queueSignal.Release();
+
+    return true;
+}
+
 capture.DataAvailable += (_, e) =>
 {
     WriteToRingBuffer(e.Buffer, e.BytesRecorded);
@@ -180,6 +241,8 @@ capture.RecordingStopped += (_, e) =>
     {
         captureStopped = true;
     }
+
+    queueSignal.Release();
 
     if (e.Exception != null)
     {
@@ -196,6 +259,72 @@ capture.StartRecording();
 Console.WriteLine(
     $"Capturando durante {TestDurationSeconds} segundos...");
 Console.WriteLine();
+
+var consumerTask = Task.Run(async () =>
+{
+    while (true)
+    {
+        InferenceJob? job = null;
+
+        lock (queueLock)
+        {
+            if (queue.Count > 0)
+            {
+                job = queue.Dequeue();
+            }
+        }
+
+        if (job != null)
+        {
+            int currentDepth;
+
+            lock (queueLock)
+            {
+                currentDepth = queue.Count;
+            }
+
+            Console.WriteLine(
+                $"  INFERENCIA #{job.WindowIndex:D2} | " +
+                $"{job.StartSeconds:F1}s -> " +
+                $"{job.EndSeconds:F1}s | " +
+                $"cola={currentDepth}");
+
+            await Task.Delay(SimulatedInferenceMs);
+
+            lock (queueLock)
+            {
+                processedJobs++;
+                processedJobIndexes.Add(job.WindowIndex);
+            }
+
+            Console.WriteLine(
+                $"  COMPLETADA #{job.WindowIndex:D2}");
+
+            continue;
+        }
+
+        bool stopped;
+
+        lock (stateLock)
+        {
+            stopped = captureStopped;
+        }
+
+        bool producerFinished;
+
+        lock (queueLock)
+        {
+            producerFinished = stopped && queue.Count == 0;
+        }
+
+        if (producerFinished)
+        {
+            break;
+        }
+
+        await queueSignal.WaitAsync();
+    }
+});
 
 var schedulerTask = Task.Run(async () =>
 {
@@ -228,19 +357,24 @@ var schedulerTask = Task.Run(async () =>
                 windowEndFrame,
                 out var audio))
             {
-                generatedWindows.Add(
-                    (
-                        windowIndex,
-                        nextWindowStartFrame,
-                        windowEndFrame,
-                        audio
-                    ));
+                var startSeconds =
+                    nextWindowStartFrame / (double)sampleRate;
+
+                var endSeconds =
+                    windowEndFrame / (double)sampleRate;
 
                 Console.WriteLine(
                     $"VENTANA #{windowIndex}: " +
-                    $"{nextWindowStartFrame / (double)sampleRate:F3}s -> " +
-                    $"{windowEndFrame / (double)sampleRate:F3}s | " +
+                    $"{startSeconds:F3}s -> " +
+                    $"{endSeconds:F3}s | " +
                     $"{audio.Length} bytes");
+
+                TryEnqueue(
+                    new InferenceJob(
+                        WindowIndex: windowIndex,
+                        StartSeconds: startSeconds,
+                        EndSeconds: endSeconds,
+                        Audio: audio));
 
                 windowIndex++;
                 nextWindowStartFrame += stepFrames;
@@ -261,12 +395,25 @@ var schedulerTask = Task.Run(async () =>
 await Task.Delay(
     TimeSpan.FromSeconds(TestDurationSeconds));
 
+Console.WriteLine("ANTES DE STOP");
 capture.StopRecording();
+Console.WriteLine("DESPUÃ‰S DE STOP");
 
 await schedulerTask;
+Console.WriteLine("SCHEDULER TERMINADO");
+
+await consumerTask;
+Console.WriteLine("CONSUMIDOR TERMINADO");
+
+int remainingJobs;
+
+lock (queueLock)
+{
+    remainingJobs = queue.Count;
+}
 
 Console.WriteLine();
-Console.WriteLine("=== RESULTADO ===");
+Console.WriteLine("=== RESULTADO CAPTURA ===");
 
 lock (stateLock)
 {
@@ -277,40 +424,70 @@ lock (stateLock)
         totalFramesCaptured / (double)sampleRate;
 
     Console.WriteLine(
-        $"Duración calculada: {duration:F3}s");
+        $"DuraciÃ³n calculada: {duration:F3}s");
 
     Console.WriteLine(
         $"Frames descartados del ring buffer: " +
         $"{droppedFramesFromRingBuffer}");
 }
 
-Console.WriteLine(
-    $"Ventanas generadas: {generatedWindows.Count}");
+Console.WriteLine();
+Console.WriteLine("=== RESULTADO COLA ===");
+
+Console.WriteLine($"Jobs producidos: {producedJobs}");
+Console.WriteLine($"Jobs procesados: {processedJobs}");
+Console.WriteLine($"Jobs descartados: {droppedJobs}");
+Console.WriteLine($"Jobs pendientes: {remainingJobs}");
+Console.WriteLine($"Profundidad mÃ¡xima: {maxQueueDepth}");
 
 Console.WriteLine();
-Console.WriteLine("=== VALIDACIÓN DE VENTANAS ===");
+Console.WriteLine("=== VALIDACIÃ“N COLA ===");
 
-foreach (var window in generatedWindows)
+var accountingOk =
+    producedJobs ==
+    processedJobs +
+    droppedJobs +
+    remainingJobs;
+
+var capacityOk =
+    maxQueueDepth <= QueueCapacity;
+
+Console.WriteLine(
+    $"Contabilidad: " +
+    $"{producedJobs} = {processedJobs} + " +
+    $"{droppedJobs} + {remainingJobs} " +
+    $"| {(accountingOk ? "OK" : "ERROR")}");
+
+Console.WriteLine(
+    $"Capacidad mÃ¡xima: " +
+    $"{maxQueueDepth} <= {QueueCapacity} " +
+    $"| {(capacityOk ? "OK" : "ERROR")}");
+
+Console.WriteLine();
+Console.WriteLine("=== ORDEN DE PROCESAMIENTO ===");
+
+foreach (var index in processedJobIndexes)
 {
-    var expectedBytes =
-        checked((int)(
-            (window.EndFrame - window.StartFrame)
-            * bytesPerFrame));
-
-    var duration =
-        (window.EndFrame - window.StartFrame)
-        / (double)sampleRate;
-
-    var sizeOk =
-        window.Audio.Length == expectedBytes;
-
-    Console.WriteLine(
-        $"Ventana #{window.Index}: " +
-        $"duración={duration:F3}s | " +
-        $"bytes={window.Audio.Length} | " +
-        $"esperados={expectedBytes} | " +
-        $"tamaño={(sizeOk ? "OK" : "ERROR")}");
+    Console.WriteLine($"#{index:D2}");
 }
 
 Console.WriteLine();
-Console.WriteLine("Paso 1 finalizado.");
+Console.WriteLine("=== JOBS DESCARTADOS ===");
+
+foreach (var index in droppedJobIndexes)
+{
+    Console.WriteLine($"#{index:D2}");
+}
+
+Console.WriteLine();
+Console.WriteLine(
+    $"POC 7 Paso 2 " +
+    $"{(accountingOk && capacityOk ? "PASS" : "FAIL")}.");
+
+record InferenceJob(
+    int WindowIndex,
+    double StartSeconds,
+    double EndSeconds,
+    byte[] Audio);
+
+
