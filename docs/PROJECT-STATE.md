@@ -329,3 +329,51 @@ Detailed results are documented in `docs/POC6-BOUNDED-INFERENCE-QUEUE-RESULTS-20
 Commit:
 
 - `2da0dca` — Add bounded inference queue POC
+
+### POC7 - end-to-end integration design
+
+POC7 has been designed as the first controlled end-to-end integration between the validated WASAPI scheduler, bounded inference queue, persistent whisper-server, whisper-server JSON adapter, and word construction.
+
+Planned flow:
+
+```text
+WASAPI Loopback
+    ->
+Ring Buffer
+    ->
+Scheduler
+    ->
+Bounded Inference Queue
+    ->
+persistent whisper-server
+    ->
+verbose_json
+    ->
+Convert-WhisperServer
+    ->
+Build-WhisperWords
+The POC7 design explicitly excludes continuous realtime reconstruction, final latency validation, watchdog/restart behavior, long-duration soak testing, LLM integration, and final production decisions for window geometry or queue overflow policy.
+
+The POC7 project has been created at:
+
+`AudioCapturePOC/EndToEndPOC/`
+
+Current project configuration:
+
+- .NET 10
+- NAudio 3.1.0
+- `HttpClient` from the .NET runtime for whisper-server communication
+
+The project currently compiles successfully from a clean generated console-project baseline.
+
+Design document:
+
+- `docs/POC7-END-TO-END-INTEGRATION-DESIGN-2026-09-09.md`
+
+Design commit:
+
+- `650f7f2` - Document POC7 end-to-end integration design
+
+**Status:** POC7 **DESIGNED / NOT YET EXECUTED**.
+
+No POC7 PASS/FAIL result has been established yet.
