@@ -410,4 +410,68 @@ The following validated components must not be modified as part of the initial P
 
 POC7 does not establish the final production window geometry, final queue overflow policy, continuous realtime reconstruction behavior, final latency target, watchdog/restart behavior, or LLM integration.
 
-**Status:** POC7 **IMPLEMENTATION BASELINE / NOT YET EXECUTED**.
+**Status:** POC7 **IN PROGRESS — PASO 1 PASS**.
+
+### POC7 Paso 1 — WASAPI Loopback + Ring Buffer + Scheduler
+
+El Paso 1 de POC7 fue implementado y ejecutado con captura WASAPI Loopback real mediante NAudio.
+
+Configuración experimental:
+
+| Parámetro | Valor |
+|---|---:|
+| Captura | WASAPI Loopback |
+| Sample rate | 48,000 Hz |
+| Canales | 2 |
+| Formato | 32-bit IEEE Float |
+| Bytes por frame | 8 |
+| Ring buffer | 20 s |
+| Duración de prueba | 15 s |
+| Ventana | 5 s |
+| Solapamiento | 1 s |
+| Paso | 4 s |
+
+La primera ejecución no produjo ventanas completas porque no había audio reproduciéndose durante la prueba. Esa ejecución no se utilizó para validar el resultado.
+
+En la segunda ejecución, con audio reproduciéndose:
+
+- Frames capturados: `719,520`.
+- Bytes capturados: `5,756,160`.
+- Duración calculada: `14.990 s`.
+- Frames descartados del ring buffer: `0`.
+- Ventanas generadas: `3`.
+- Ventana `#0`: `0.000-5.000 s` — `1,920,000` bytes.
+- Ventana `#1`: `4.000-9.000 s` — `1,920,000` bytes.
+- Ventana `#2`: `8.000-13.000 s` — `1,920,000` bytes.
+- Las tres ventanas tuvieron el tamaño esperado: `OK`.
+
+**Status:** POC7 Paso 1 — **PASS**.
+
+Este resultado valida específicamente:
+
+- captura WASAPI Loopback;
+- recepción de audio mediante callback;
+- escritura al ring buffer;
+- conservación temporal mediante índices de frames;
+- extracción de ventanas solapadas;
+- tamaño correcto de las ventanas;
+- ausencia de pérdida de frames del ring buffer durante esta prueba;
+- terminación controlada mediante el estado de `RecordingStopped`.
+
+El resultado no valida todavía la cola de inferencia, comunicación con `whisper-server`, procesamiento ASR real dentro del flujo, reconstrucción continua, saturación, watchdog, latencia end-to-end, reconexión de dispositivo ni operación prolongada.
+
+La implementación del Paso 1 está en:
+
+`AudioCapturePOC/EndToEndPOC/`
+
+Commit:
+
+- `0bade0b` — Add POC7 WASAPI scheduler implementation
+
+Documentación detallada:
+
+- `docs/POC7-PASO1-WASAPI-SCHEDULER-RESULTS-2026-09-10.md`
+
+Nota técnica: el proyecto compila con NAudio 3.1.0 y actualmente utiliza `WasapiLoopbackCapture`, aunque esa API aparece marcada como obsoleta por NAudio. No se cambia la API en este paso para evitar introducir una variable adicional respecto del POC4 ya validado. La posible migración a la API recomendada queda como decisión técnica posterior y no afecta al PASS experimental de este paso.
+
+**Siguiente paso:** integrar la bounded inference queue con las ventanas reales producidas por el scheduler y conectarla al `whisper-server` persistente. No se modifica todavía la geometría experimental de ventanas ni se declara una política de overflow de producción.
