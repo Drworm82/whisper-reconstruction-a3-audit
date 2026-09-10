@@ -24,7 +24,7 @@ Audio capture is now being evaluated as a separate subsystem. OBS is not yet con
 
 ### whisper.cpp
 
-- Installed at `C:\whisper.cpp` in the user's Windows environment.
+- Installed at `C:\\whisper.cpp` in the user's Windows environment.
 - GPU: AMD Radeon RX 6600 XT.
 - Backend observed: Vulkan.
 - Model tested: `ggml-base.en.bin`.
@@ -51,12 +51,12 @@ Responsibilities:
 - Convert segment timestamp strings to seconds.
 - Convert token offsets from milliseconds to seconds.
 - Preserve token leading whitespace because `Build-WhisperWords` uses it for word boundaries.
-- Drop control/timestamp tokens matching `^\[_.*\]$`.
+- Drop control/timestamp tokens matching `^\\[_.*\\]$`.
 - Reject inverted timestamps.
 
 ### Control-token filtering fix
 
-The adapter initially used the incorrect pattern `^\[_.*_\]$`. Real whisper.cpp control tokens such as `[_TT_280]` do not contain an underscore immediately before the closing bracket, so that pattern failed to match them. The adapter was corrected to `^\[_.*\]$`.
+The adapter initially used the incorrect pattern `^\\[_.*_\\]$`. Real whisper.cpp control tokens such as `[_TT_280]` do not contain an underscore immediately before the closing bracket, so that pattern failed to match them. The adapter was corrected to `^\\[_.*\\]$`.
 
 Commit:
 
@@ -197,26 +197,62 @@ The later documentation update was rebased locally and the resulting code commit
 
 ## 9. Immediate next step
 
-**POC7 — real integration:**
+**POC7 — Paso 3: real integration with whisper-server**
 
-`WASAPI capture` → `scheduler / audio windows` → `bounded inference queue` → `persistent whisper-server` → `normalized ASR` → `word construction` → `reconstruction`
+The POC7 Paso 1 scheduler and Paso 2 bounded inference queue have been implemented and validated independently within the POC7 end-to-end harness.
 
-POC7 must validate the real integration of these components working together under actual capture and inference conditions, not simply repeat the isolated POCs. The focus is confirming each hand-off between components (`WASAPI capture` → `scheduler` → `bounded inference queue` → `whisper-server` → `Convert-WhisperServer` → `Build-WhisperWords` → `New-WhisperWindows` → `Reconstruct-WhisperWindows`) behaves correctly when the pieces are connected and running for real.
+Current validated flow:
 
-Kept as separate, later validation steps:
+`WASAPI Loopback -> Ring Buffer -> Scheduler -> Bounded Inference Queue -> sequential consumer`
 
-- watchdog / restart of whisper-server
-- behavior under sustained saturation
-- definitive overflow policy
-- end-to-end latency
-- device-change / reconnection
-- long-duration soak test
+POC7 Paso 2 validation:
 
-Phase 2 remains out of scope: LLM / question detection / context assistance is not to be incorporated yet.
+- Test duration: `15 s`.
+- Window geometry: `5 s` window, `1 s` overlap, `4 s` step.
+- Queue capacity: `3` jobs.
+- Simulated inference time: `500 ms/job`.
+- Jobs produced: `3`.
+- Jobs processed: `3`.
+- Jobs discarded: `0`.
+- Jobs pending: `0`.
+- Maximum queue depth: `1`.
+- Accounting: `3 = 3 + 0 + 0` — `OK`.
+- Capacity: `1 <= 3` — `OK`.
+- Processing order: `#00`, `#01`, `#02`.
+- Clean termination: scheduler and consumer both completed.
 
-The system is **not** yet validated as continuous realtime, and the MVP is **not** declared finished. POC4 validated the WASAPI capture/scheduler layer; POC5 validated structural scheduler + whisper-server integration; POC6 validated the bounded inference-queue mechanics in isolation.
+A termination issue was found during an earlier Paso 2 execution: the consumer could remain blocked in `SemaphoreSlim.WaitAsync()` after `RecordingStopped`. The `RecordingStopped` handler was corrected to release `queueSignal`, after which the complete run terminated correctly.
 
-### POC4 result - WASAPI Loopback + ring buffer + audio scheduler
+**Status:** POC7 Paso 2 — **PASS** under non-saturated load.
+
+Important limitation: the Paso 2 execution did not saturate the queue. `DropOldest` was not exercised by actual overflow in this run and remains an experimental policy, not a production decision.
+
+Detailed Paso 2 results are documented in `docs/POC7-PASO2-BOUNDED-INFERENCE-QUEUE-RESULTS-2026-09-10.md`.
+
+### POC7 Paso 3 scope
+
+Next, connect the bounded inference queue to the already validated persistent `whisper-server` instead of the simulated consumer.
+
+Target flow:
+
+`WASAPI Loopback -> Ring Buffer -> Scheduler -> Bounded Inference Queue -> persistent whisper-server -> verbose_json -> Convert-WhisperServer -> Build-WhisperWords`
+
+The immediate objective is to validate the actual hand-off from a queued scheduler window to real whisper-server inference and back into normalized ASR data.
+
+The following remain outside the immediate Paso 3 scope:
+
+- continuous realtime reconstruction;
+- final end-to-end latency target;
+- watchdog/restart behavior;
+- sustained saturation and definitive overflow policy;
+- device-change/reconnection;
+- long-duration soak testing;
+- LLM/question detection/context assistance;
+- final production window geometry.
+
+POC7 is therefore still an experimental integration sequence. The system is **not** yet validated as continuous realtime and the MVP is **not** declared finished.
+
+## 10. POC4 result - WASAPI Loopback + ring buffer + audio scheduler
 
 POC4 validated the audio capture/scheduler layer using WASAPI Loopback, a 20-second
 ring buffer, and overlapping scheduler windows.
@@ -263,7 +299,7 @@ Commit:
 
 Detailed results are documented in `docs/POC4-WASAPI-SCHEDULER-RESULTS-2026-09-09.md`.
 
-### POC5 result — scheduler + whisper-server structural integration
+## 11. POC5 result — scheduler + whisper-server structural integration
 
 The scheduler-generated windows `0-5s`, `4-9s`, and `8-13s` were processed sequentially through the persistent whisper-server, converted with `Convert-WhisperServer`, normalized with `Build-WhisperWords`, and evaluated through `Reconstruct-WhisperWindows`.
 
@@ -284,9 +320,7 @@ The two `SIN MATCH` results are not considered evidence of a reconstruction defe
 
 Detailed results are documented in `docs/POC5-SCHEDULER-WHISPER-SERVER-INTEGRATION-RESULTS-2026-09-09.md`.
 
-After POC5, the bounded inference-queue mechanics were validated in isolation as POC6 (see below). The next step is to design and validate the real end-to-end scheduler ? inference-queue ? whisper-server integration, without yet declaring continuous realtime reconstruction validated.
-
-### POC6 result — bounded inference queue
+## 12. POC6 result — bounded inference queue
 
 The bounded inference-queue mechanics were validated in isolation before proceeding to POC7.
 
@@ -314,15 +348,7 @@ Observed result:
 
 **Status:** POC6 bounded-inference-queue mechanics **PASS**.
 
-POC6 validates only the mechanics of the bounded inference queue in isolation. It does **not** validate:
-
-- real `WASAPI → scheduler → queue → whisper-server` integration
-- real inference under sustained saturation
-- watchdog / restart
-- a definitive overflow policy (`DropOldest` remains the POC-validated policy, not a final production decision)
-- end-to-end latency
-- device-change / reconnection
-- a 2–3 hour soak test
+POC6 validates only the mechanics of the bounded inference queue in isolation. It does **not** validate real `WASAPI → scheduler → queue → whisper-server` integration, real inference under sustained saturation, watchdog/restart, a definitive overflow policy, end-to-end latency, device-change/reconnection, or a 2–3 hour soak test.
 
 Detailed results are documented in `docs/POC6-BOUNDED-INFERENCE-QUEUE-RESULTS-2026-09-09.md`.
 
@@ -330,9 +356,9 @@ Commit:
 
 - `2da0dca` — Add bounded inference queue POC
 
-### POC7 - end-to-end integration design
+## 13. POC7 - end-to-end integration design
 
-POC7 has been designed as the first controlled end-to-end integration between the validated WASAPI scheduler, bounded inference queue, persistent whisper-server, whisper-server JSON adapter, and word construction.
+POC7 was designed as the first controlled end-to-end integration between the validated WASAPI scheduler, bounded inference queue, persistent whisper-server, whisper-server JSON adapter, and word construction.
 
 Planned flow:
 
@@ -352,6 +378,8 @@ verbose_json
 Convert-WhisperServer
     ->
 Build-WhisperWords
+```
+
 The POC7 design explicitly excludes continuous realtime reconstruction, final latency validation, watchdog/restart behavior, long-duration soak testing, LLM integration, and final production decisions for window geometry or queue overflow policy.
 
 The POC7 project has been created at:
@@ -364,8 +392,6 @@ Current project configuration:
 - NAudio 3.1.0
 - `HttpClient` from the .NET runtime for whisper-server communication
 
-The project currently compiles successfully from a clean generated console-project baseline.
-
 Design document:
 
 - `docs/POC7-END-TO-END-INTEGRATION-DESIGN-2026-09-09.md`
@@ -374,11 +400,9 @@ Design commit:
 
 - `650f7f2` - Document POC7 end-to-end integration design
 
-**Status:** POC7 **DESIGNED / NOT YET EXECUTED**.
+**Status:** POC7 **IN PROGRESS**.
 
-No POC7 PASS/FAIL result has been established yet.
-```
-### POC7 - implementation baseline
+## 14. POC7 - implementation baseline
 
 POC7 implementation starts from the documented and published repository state at commit `1ee3f72`.
 
@@ -410,9 +434,9 @@ The following validated components must not be modified as part of the initial P
 
 POC7 does not establish the final production window geometry, final queue overflow policy, continuous realtime reconstruction behavior, final latency target, watchdog/restart behavior, or LLM integration.
 
-**Status:** POC7 **IN PROGRESS — PASO 1 PASS**.
+**Status:** POC7 **IN PROGRESS — PASO 1 PASS; PASO 2 PASS**.
 
-### POC7 Paso 1 — WASAPI Loopback + Ring Buffer + Scheduler
+## 15. POC7 Paso 1 — WASAPI Loopback + Ring Buffer + Scheduler
 
 El Paso 1 de POC7 fue implementado y ejecutado con captura WASAPI Loopback real mediante NAudio.
 
@@ -474,4 +498,66 @@ Documentación detallada:
 
 Nota técnica: el proyecto compila con NAudio 3.1.0 y actualmente utiliza `WasapiLoopbackCapture`, aunque esa API aparece marcada como obsoleta por NAudio. No se cambia la API en este paso para evitar introducir una variable adicional respecto del POC4 ya validado. La posible migración a la API recomendada queda como decisión técnica posterior y no afecta al PASS experimental de este paso.
 
-**Siguiente paso:** integrar la bounded inference queue con las ventanas reales producidas por el scheduler y conectarla al `whisper-server` persistente. No se modifica todavía la geometría experimental de ventanas ni se declara una política de overflow de producción.
+## 16. POC7 Paso 2 — Bounded Inference Queue
+
+El Paso 2 de POC7 integró las ventanas reales del scheduler con una bounded inference queue y un consumidor secuencial simulado.
+
+Configuración experimental:
+
+| Parámetro | Valor |
+|---|---:|
+| Captura | WASAPI Loopback |
+| Sample rate | 48,000 Hz |
+| Canales | 2 |
+| Formato | 32-bit IEEE Float |
+| Ring buffer | 20 s |
+| Duración de prueba | 15 s |
+| Ventana | 5 s |
+| Solapamiento | 1 s |
+| Paso | 4 s |
+| Capacidad de cola | 3 jobs |
+| Procesamiento simulado | 500 ms/job |
+| Overflow experimental | DropOldest |
+
+Flujo validado:
+
+`WASAPI Loopback -> Ring Buffer -> Scheduler -> Ventana de audio real -> Bounded Inference Queue -> Consumidor secuencial`
+
+Resultados observados:
+
+- Frames capturados: `719,520`.
+- Bytes capturados: `5,756,160`.
+- Duración calculada: `14.990 s`.
+- Frames descartados del ring buffer: `0`.
+- Ventanas producidas: `3`.
+- Jobs producidos: `3`.
+- Jobs procesados: `3`.
+- Jobs descartados: `0`.
+- Jobs pendientes: `0`.
+- Profundidad máxima: `1`.
+- Contabilidad: `3 = 3 + 0 + 0` — `OK`.
+- Capacidad: `1 <= 3` — `OK`.
+- Orden de procesamiento: `#00`, `#01`, `#02`.
+- Terminación: `SCHEDULER TERMINADO` y `CONSUMIDOR TERMINADO`.
+
+Durante una ejecución previa del Paso 2 se detectó una condición de terminación en la que el consumidor podía quedar bloqueado en `SemaphoreSlim.WaitAsync()` después de `RecordingStopped`. La corrección fue señalizar `queueSignal` desde `RecordingStopped`. Después de la corrección se obtuvo una ejecución completa con terminación correcta.
+
+**Status:** POC7 Paso 2 — **PASS** bajo carga no saturada.
+
+Limitación: esta ejecución no saturó la cola. Por lo tanto, `DropOldest` no fue ejercitado mediante overflow real y no se establece como política de producción.
+
+La implementación está en:
+
+`AudioCapturePOC/EndToEndPOC/Program.cs`
+
+Documentación detallada:
+
+- `docs/POC7-PASO2-BOUNDED-INFERENCE-QUEUE-RESULTS-2026-09-10.md`
+
+Commit:
+
+- `6d20912` — Add POC7 bounded inference queue
+
+**Siguiente paso:** POC7 Paso 3 — conectar la bounded inference queue con el `whisper-server` persistente real y validar el transporte de una ventana de audio real hacia `verbose_json` y de regreso hacia `Convert-WhisperServer` / `Build-WhisperWords`.
+
+No se modifica todavía la geometría experimental de ventanas ni se establece una política definitiva de overflow.
