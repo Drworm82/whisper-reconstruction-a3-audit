@@ -197,11 +197,11 @@ The later documentation update was rebased locally and the resulting code commit
 
 ## 9. Immediate next step
 
-1. Build a small NAudio + WASAPI Loopback proof of concept.
-2. Persist the complete captured session while simultaneously exposing PCM data to a short ASR buffer.
-3. Measure capture-to-text latency with controlled audio rather than inferring latency from recording block size.
-4. Test behavior when the Windows default playback device changes or disappears.
-5. Test sustained capture and simultaneous recording/ASR under a realistic class/meeting workload.
-6. After the POC, decide whether OBS has any continuing production role and document the final capture architecture.
-7. Continue comparing the whisper.cpp path against established reconstruction invariants before evaluating five-hour operation requirements.
-8. Add or run a focused regression test for whisper.cpp control-token filtering if the existing test suite does not already cover it.
+1. Process scheduler windows `0-5s`, `4-9s`, and `8-13s` sequentially through whisper-server.
+2. Convert each `verbose_json` response through `Convert-WhisperServer`.
+3. Build words with `Build-WhisperWords`.
+4. Evaluate the three normalized window outputs through the existing reconstruction path.
+5. Document whether reconstruction preserves the expected word sequence and temporal ordering.
+6. Only after multi-window reconstruction is validated, proceed to real bounded inference-queue integration.
+7. Keep watchdog, overflow policy, latency measurement, device-change handling, and long-duration soak testing as separate validation steps.
+8. Do not finalize window geometry beyond the current POC parameters until scheduler and reconstruction behavior have been evaluated together.
