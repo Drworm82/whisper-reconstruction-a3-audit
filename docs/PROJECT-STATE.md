@@ -199,45 +199,89 @@ The later documentation update was rebased locally and the resulting code commit
 
 **POC7 — Paso 4: integrate verbose_json with Convert-WhisperServer and Build-WhisperWords**
 
-POC7 Paso 1, Paso 2, and Paso 3 have now been implemented and validated within the POC7 end-to-end harness.
+POC7 Paso 1, Paso 2, y Paso 3 han sido implementados y validados dentro del harness end-to-end de POC7.
 
-Current validated flow:
+### POC7 Paso 4 — resultado
 
-`WASAPI Loopback -> Ring Buffer -> Scheduler -> Bounded Inference Queue -> sequential consumer -> persistent whisper-server -> verbose_json`
+**Estado:** **PASS**
 
-POC7 Paso 3 validation:
+El objetivo de este paso fue validar la continuidad de segmentos de `whisper-server` al pasar por `Convert-WhisperServer`, `Build-WhisperWords` y la reconstrucción.
 
-- Test duration requested: `15 s`.
-- Second validation run captured `14.960 s`.
-- Window geometry: `5 s` window, `1 s` overlap, `4 s` step.
-- Queue capacity: `3` jobs.
-- Jobs produced: `3`.
-- Jobs processed: `3`.
-- Jobs discarded: `0`.
-- Jobs pending: `0`.
-- Maximum queue depth: `1`.
-- Inferencias exitosas: `3`.
-- Inferencias fallidas: `0`.
-- HTTP status: `200` for all three processed jobs.
-- `verbose_json`: structurally valid for all three processed jobs (`task`, `language`, `segments`, `text`).
-- ASR output counts: `13`, `16`, and `7` word units across jobs `#00`, `#01`, and `#02` respectively.
-- Processing order: `#00`, `#01`, `#02`.
-- Capture ring-buffer dropped frames: `0`.
-- Scheduler and consumer terminated correctly.
-- Server remained available after testing (`GET /` -> `HTTP 200`).
+Fixture utilizado:
 
-**Status:** POC7 Paso 3 — **PASS** under the observed non-saturated load.
+- `AudioCapturePOC/poc7-language-es-turbo.json`
+- 4 segmentos de `whisper-server`
+- 45 unidades de token
+- Envolvente temporal: `0.000 s -> 14.680 s`
 
-A first Paso 3 run produced only `10.720 s` of captured audio and two windows. That run was retained as evidence but not used as the final validation because it did not reach the expected temporal coverage. A second run reached `14.960 s` and produced all three expected windows; that run is the validation basis for the PASS.
+Antes de la corrección, `Convert-WhisperServer` generaba una Window por cada segmento interno de `whisper-server`. Esto producía 4 Windows en lugar de una Window por respuesta HTTP. Al ejecutar `Build-WhisperWords` por separado sobre esos segmentos se producían divisiones incorrectas de palabras, incluyendo:
 
-The implementation added real HTTP inference using the persistent whisper-server. Each scheduler window is wrapped as WAV audio in memory and sent as `multipart/form-data` with `temperature=0.0` and `response_format=verbose_json`. Responses are checked for successful HTTP status and minimum `verbose_json` structure before a job is classified as successful.
+- `facult ad`
+- `administr ación`
 
-Important limitation: the queue was not saturated during Paso 3; `DropOldest` therefore was not exercised by actual overflow and remains experimental rather than a production decision. The step also does not validate continuous reconstruction, real MATCH/DEDUP across repeated speech, watchdog/restart, device reconnection, end-to-end latency target, long-duration soak, final window geometry, or LLM integration.
+La corrección implementada en `Convert-WhisperServer`:
 
-Detailed Paso 3 results are documented in:
+- acumula todos los `segments[].words[]` en un único arreglo ordenado de `Tokens`;
+- conserva el `Start` del primer segmento y el `End` del último segmento como envolvente temporal de la respuesta;
+- devuelve exactamente una Window `{Start, End, Tokens}` por respuesta HTTP;
+- no invoca `Build-WhisperWords` dentro del adapter;
+- conserva las validaciones existentes de estructura y tiempos.
 
-- `docs/POC7-PASO3-WHISPER-SERVER-INTEGRATION-RESULTS-2026-09-10.md`
+No se modificaron:
 
+- `Convert-WhisperCpp.ps1`
+- `Build-WhisperWords.ps1`
+- `Reconstruct-WhisperWindows.ps1`
+
+### Validación formal
+
+La regresión Pester `tests/Convert-WhisperServer.SegmentContinuity.Tests.ps1` obtuvo:
+
+- Passed: `3`
+- Failed: `0`
+- Skipped: `0`
+- Pending: `0`
+- Inconclusive: `0`
+
+La integración `Convert-WhisperServer -> Build-WhisperWords -> Find-WordOverlap -> Reconstruct-WhisperWindows` produjo:
+
+- 1 Window
+- 45 unidades de token
+- 26 palabras
+- sin tiempos vacíos o inválidos
+- sin problemas de orden temporal
+- texto reconstruido exactamente igual al texto esperado del fixture
+
+Texto reconstruido validado:
+
+`a través del programa universitario de gobierno, la facultad de economía y las facultades de contaduría y administración, ciencias políticas y sociales, derecho, filosofía y letras.`
+
+El hallazgo previo sobre continuidad de segmentos está documentado históricamente en:
+
+- `docs/POC7-PASO4-WHISPER-SERVER-SEGMENT-CONTINUITY-FINDINGS-2026-09-10.md`
+
+Los resultados finales de la corrección están documentados en:
+
+- `docs/POC7-PASO4-WHISPER-SERVER-SEGMENT-CONTINUITY-RESULTS-2026-09-10.md`
+
+### Limitaciones pendientes
+
+Paso 4 valida el adapter y la integración aislada, pero todavía no valida:
+
+- múltiples respuestas HTTP del runtime real pasando por el adapter corregido;
+- saturación de la cola y política definitiva de overflow;
+- reconstrucción continua en tiempo real;
+- MATCH/DEDUP real sobre habla repetida;
+- watchdog/reinicio de `whisper-server`;
+- reconexión del dispositivo de audio;
+- objetivo de latencia end-to-end;
+- soak test de larga duración;
+- geometría final de ventanas;
+- integración del LLM de Fase 2.
+
+### Siguiente paso
+
+**POC7 — Paso 5: integrar el adapter `Convert-WhisperServer` corregido en el flujo end-to-end real y validar `Convert -> Build -> Reconstruct` sobre múltiples ventanas HTTP consecutivas.**
 ## 10. POC4 result - WASAPI Loopback + ring buffer + audio scheduler
 
 POC4 validated the audio capture/scheduler layer using WASAPI Loopback, a 20-second ring buffer, and overlapping scheduler windows.
