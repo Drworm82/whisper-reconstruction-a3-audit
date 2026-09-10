@@ -378,3 +378,36 @@ Design commit:
 
 No POC7 PASS/FAIL result has been established yet.
 ```
+### POC7 - implementation baseline
+
+POC7 implementation starts from the documented and published repository state at commit `1ee3f72`.
+
+Existing components reused by POC7:
+
+- `AudioCapturePOC/SchedulerPOC/` — validated WASAPI Loopback + Ring Buffer + overlapping-window scheduler POC.
+- `AudioCapturePOC/InferenceQueuePOC/` — validated bounded inference queue POC.
+- `src/Import/Convert-WhisperServer.ps1` — whisper-server `verbose_json` adapter.
+- `src/Words/Build-WhisperWords.ps1` — normalized word construction.
+- Persistent `whisper-server` available at `http://127.0.0.1:8080`.
+
+Initial POC7 experimental configuration:
+
+- WASAPI Loopback capture.
+- 48 kHz, 2 channels, IEEE Float capture format.
+- 5-second audio windows.
+- 1-second overlap.
+- 4-second scheduler step.
+- Bounded inference queue.
+- Sequential inference consumption.
+- Persistent whisper-server.
+- `verbose_json` response format.
+
+The following validated components must not be modified as part of the initial POC7 implementation unless POC7 produces specific evidence requiring a change:
+
+- `src/Import/Convert-WhisperCpp.ps1`
+- `src/Words/Build-WhisperWords.ps1`
+- `src/Reconstruction/Reconstruct-WhisperWindows.ps1`
+
+POC7 does not establish the final production window geometry, final queue overflow policy, continuous realtime reconstruction behavior, final latency target, watchdog/restart behavior, or LLM integration.
+
+**Status:** POC7 **IMPLEMENTATION BASELINE / NOT YET EXECUTED**.
