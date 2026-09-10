@@ -27,7 +27,7 @@ Audio capture is now being evaluated as a separate subsystem. OBS is not yet con
 - Installed at `C:\whisper.cpp` in the user's Windows environment.
 - GPU: AMD Radeon RX 6600 XT.
 - Backend observed: Vulkan.
-- Model tested: `ggml-base.base.en.bin`.
+- Model tested: `ggml-base.en.bin`.
 - Real test audio: `tests/fixtures/real-course-test.wav`.
 - Duration: approximately 125 seconds.
 - `whisper-cli.exe -ojf` produced token-level JSON timestamps.
@@ -197,14 +197,24 @@ The later documentation update was rebased locally and the resulting code commit
 
 ## 9. Immediate next step
 
-1. Process scheduler windows `0-5s`, `4-9s`, and `8-13s` sequentially through whisper-server.
-2. Convert each `verbose_json` response through `Convert-WhisperServer`.
-3. Build words with `Build-WhisperWords`.
-4. Evaluate the three normalized window outputs through the existing reconstruction path.
-5. Document whether reconstruction preserves the expected word sequence and temporal ordering.
-6. Only after multi-window reconstruction is validated, proceed to real bounded inference-queue integration.
-7. Keep watchdog, overflow policy, latency measurement, device-change handling, and long-duration soak testing as separate validation steps.
-8. Do not finalize window geometry beyond the current POC parameters until scheduler and reconstruction behavior have been evaluated together.
+**POC7 — real integration:**
+
+`WASAPI capture` → `scheduler / audio windows` → `bounded inference queue` → `persistent whisper-server` → `normalized ASR` → `word construction` → `reconstruction`
+
+POC7 must validate the real integration of these components working together under actual capture and inference conditions, not simply repeat the isolated POCs. The focus is confirming each hand-off between components (`WASAPI capture` → `scheduler` → `bounded inference queue` → `whisper-server` → `Convert-WhisperServer` → `Build-WhisperWords` → `New-WhisperWindows` → `Reconstruct-WhisperWindows`) behaves correctly when the pieces are connected and running for real.
+
+Kept as separate, later validation steps:
+
+- watchdog / restart of whisper-server
+- behavior under sustained saturation
+- definitive overflow policy
+- end-to-end latency
+- device-change / reconnection
+- long-duration soak test
+
+Phase 2 remains out of scope: LLM / question detection / context assistance is not to be incorporated yet.
+
+The system is **not** yet validated as continuous realtime, and the MVP is **not** declared finished. POC5 was a structural integration; POC6 was an isolated bounded-queue validation.
 
 ### POC5 result — scheduler + whisper-server structural integration
 
@@ -227,4 +237,48 @@ The two `SIN MATCH` results are not considered evidence of a reconstruction defe
 
 Detailed results are documented in `docs/POC5-SCHEDULER-WHISPER-SERVER-INTEGRATION-RESULTS-2026-09-09.md`.
 
-Next step remains bounded inference-queue integration, with watchdog, overflow policy, latency measurement, device-change handling, and long-duration soak testing kept as separate validation concerns.
+After POC5, the bounded inference-queue mechanics were validated in isolation as POC6 (see below). The next step is now POC7, the real end-to-end integration.
+
+### POC6 result — bounded inference queue
+
+The bounded inference-queue mechanics were validated in isolation before proceeding to POC7.
+
+Configuration:
+
+| Parameter | Value |
+|---|---:|
+| Queue capacity | 3 jobs |
+| Producer interval | 100 ms |
+| Consumer processing time | 500 ms/job |
+| Test duration | 5000 ms |
+| Overflow policy | `DropOldest` |
+| Implementation | `Queue<InferenceJob>` + `lock` + `SemaphoreSlim` |
+| Target | .NET 10 |
+
+Observed result:
+
+- Jobs produced: `46`
+- Jobs processed: `13`
+- Jobs dropped: `33`
+- Jobs pending: `0`
+- Max queue depth: `3`
+- Accounting: `46 = 13 + 33 + 0` | OK
+- Capacity: `3 <= 3` | OK
+
+**Status:** POC6 bounded-inference-queue mechanics **PASS**.
+
+POC6 validates only the mechanics of the bounded inference queue in isolation. It does **not** validate:
+
+- real `WASAPI → scheduler → queue → whisper-server` integration
+- real inference under sustained saturation
+- watchdog / restart
+- a definitive overflow policy (`DropOldest` remains the POC-validated policy, not a final production decision)
+- end-to-end latency
+- device-change / reconnection
+- a 2–3 hour soak test
+
+Detailed results are documented in `docs/POC6-BOUNDED-INFERENCE-QUEUE-RESULTS-2026-09-09.md`.
+
+Commit:
+
+- `2da0dca` — Add bounded inference queue POC
