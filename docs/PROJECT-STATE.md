@@ -4,7 +4,7 @@
 
 **Repository:** `Drworm82/whisper-reconstruction-a3-audit`
 
-**Last documented update:** 2026-09-09
+**Last documented update:** 2026-09-10
 
 ## 1. Current objective
 
@@ -214,7 +214,54 @@ Kept as separate, later validation steps:
 
 Phase 2 remains out of scope: LLM / question detection / context assistance is not to be incorporated yet.
 
-The system is **not** yet validated as continuous realtime, and the MVP is **not** declared finished. POC5 was a structural integration; POC6 was an isolated bounded-queue validation.
+The system is **not** yet validated as continuous realtime, and the MVP is **not** declared finished. POC4 validated the WASAPI capture/scheduler layer; POC5 validated structural scheduler + whisper-server integration; POC6 validated the bounded inference-queue mechanics in isolation.
+
+### POC4 result - WASAPI Loopback + ring buffer + audio scheduler
+
+POC4 validated the audio capture/scheduler layer using WASAPI Loopback, a 20-second
+ring buffer, and overlapping scheduler windows.
+
+Configuration:
+
+| Parameter | Value |
+|---|---:|
+| Capture | WASAPI Loopback |
+| Sample rate | 48,000 Hz |
+| Channels | 2 |
+| Format | 32-bit IEEE Float |
+| Bytes per frame | 8 |
+| Ring buffer | 20 s |
+| Test duration | 15 s |
+| Window | 5 s |
+| Overlap | 1 s |
+| Step | 4 s |
+
+Observed result:
+
+- Window `#0`: `0.000-5.000 s` - `1,920,000` bytes.
+- Window `#1`: `4.000-9.000 s` - `1,920,000` bytes.
+- Window `#2`: `8.000-13.000 s` - `1,920,000` bytes.
+- Frames captured: `720,960`.
+- Bytes captured: `5,767,680`.
+- Calculated duration: `15.020 s`.
+- Ring-buffer dropped frames: `0`.
+- All three window sizes: `OK`.
+
+The scheduler termination was corrected to use the actual WASAPI `RecordingStopped`
+event/state rather than requiring exactly 15 seconds of captured frames.
+
+**Status:** POC4 WASAPI scheduler **PASS**.
+
+The POC validates capture, ring-buffer retention, overlapping window generation,
+expected window sizing, and clean termination. It does not validate ASR inference,
+inference-queue saturation, continuous reconstruction, watchdog behavior, or
+long-duration operation.
+
+Commit:
+
+- `0218fac` - Add WASAPI scheduler POC4
+
+Detailed results are documented in `docs/POC4-WASAPI-SCHEDULER-RESULTS-2026-09-09.md`.
 
 ### POC5 result — scheduler + whisper-server structural integration
 
@@ -237,7 +284,7 @@ The two `SIN MATCH` results are not considered evidence of a reconstruction defe
 
 Detailed results are documented in `docs/POC5-SCHEDULER-WHISPER-SERVER-INTEGRATION-RESULTS-2026-09-09.md`.
 
-After POC5, the bounded inference-queue mechanics were validated in isolation as POC6 (see below). The next step is now POC7, the real end-to-end integration.
+After POC5, the bounded inference-queue mechanics were validated in isolation as POC6 (see below). The next step is to design and validate the real end-to-end scheduler ? inference-queue ? whisper-server integration, without yet declaring continuous realtime reconstruction validated.
 
 ### POC6 result — bounded inference queue
 
