@@ -26,14 +26,37 @@ function Convert-WhisperServer {
         throw "whisper-server JSON does not contain 'segments'."
     }
 
-    $windows = @()
+    $tokens = @()
+    $windowStart = $null
+    $windowEnd = $null
 
     foreach ($segment in @($data.segments)) {
         if ($null -eq $segment.words) {
             throw "whisper-server segment does not contain 'words'."
         }
 
-        $tokens = @()
+        $segmentStart = [double]$segment.start
+        $segmentEnd   = [double]$segment.end
+
+        if ([double]::IsNaN($segmentStart) -or [double]::IsNaN($segmentEnd) -or
+            [double]::IsInfinity($segmentStart) -or [double]::IsInfinity($segmentEnd)) {
+            throw "Non-finite whisper-server segment timing."
+        }
+
+        if ($segmentStart -lt 0 -or $segmentEnd -lt 0) {
+            throw "Negative whisper-server segment timing."
+        }
+
+        if ($segmentEnd -lt $segmentStart) {
+            throw "Inverted whisper-server segment timing: $segmentStart > $segmentEnd."
+        }
+
+        if ($null -eq $windowStart) {
+            $windowStart = $segmentStart
+        }
+
+        $windowEnd = $segmentEnd
+
         foreach ($word in @($segment.words)) {
             if ($null -eq $word.word -or $null -eq $word.start -or $null -eq $word.end) {
                 throw "whisper-server word entry must contain 'word', 'start', and 'end'."
@@ -71,37 +94,15 @@ function Convert-WhisperServer {
                 To   = $to
             }
         }
-
-        if ($tokens.Count -eq 0) {
-            continue
-        }
-
-        $segmentStart = [double]$segment.start
-        $segmentEnd   = [double]$segment.end
-
-        if ([double]::IsNaN($segmentStart) -or [double]::IsNaN($segmentEnd) -or
-            [double]::IsInfinity($segmentStart) -or [double]::IsInfinity($segmentEnd)) {
-            throw "Non-finite whisper-server segment timing."
-        }
-
-        if ($segmentStart -lt 0 -or $segmentEnd -lt 0) {
-            throw "Negative whisper-server segment timing."
-        }
-
-        if ($segmentEnd -lt $segmentStart) {
-            throw "Inverted whisper-server segment timing: $segmentStart > $segmentEnd."
-        }
-
-        $windows += [PSCustomObject]@{
-            Start  = $segmentStart
-            End    = $segmentEnd
-            Tokens = $tokens
-        }
     }
 
-    if ($windows.Count -eq 0) {
+    if ($tokens.Count -eq 0) {
         throw "whisper-server JSON contains no usable word units."
     }
 
-    return $windows
+    return [PSCustomObject]@{
+        Start  = $windowStart
+        End    = $windowEnd
+        Tokens = $tokens
+    }
 }

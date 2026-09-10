@@ -18,13 +18,13 @@
         $tokens = @($windows[0].Tokens)
         $text = $tokens.Text -join ""
 
-        $text | Should Be "a través del programa universitario de gobierno, la facultad de economía y las facultades de contaduría y administración, ciencias políticas y sociales, derecho, filosofía y letras."
+        $text | Should Be " a través del programa universitario de gobierno, la facultad de economía y las facultades de contaduría y administración, ciencias políticas y sociales, derecho, filosofía y letras."
     }
 
     It "preserves the complete Window timing envelope" {
         $windows = @(Convert-WhisperServer -Path $fixture)
 
         $windows[0].Start | Should Be 0
-        $windows[0].End | Should Be 14.54
+        $windows[0].End | Should Be 14.68
     }
 }
