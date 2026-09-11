@@ -1,10 +1,7 @@
 Describe "Reconstruct-WhisperWindows temporal MATCH placement integration" {
-    BeforeAll {
-        $repoRoot = Split-Path -Parent $PSScriptRoot
-        . "$repoRoot\src\Words\Build-WhisperWords.ps1"
-        . "$repoRoot\src\Alignment\Find-WordOverlap.ps1"
-        . "$repoRoot\src\Reconstruction\Reconstruct-WhisperWindows.ps1"
-    }
+    . "$PSScriptRoot/../src/Words/Build-WhisperWords.ps1"
+    . "$PSScriptRoot/../src/Alignment/Find-WordOverlap.ps1"
+    . "$PSScriptRoot/../src/Reconstruction/Reconstruct-WhisperWindows.ps1"
 
     It "accepts a lexical MATCH when the current block begins at the accumulated prefix boundary" {
         $windows = @(
@@ -59,14 +56,21 @@ Describe "Reconstruct-WhisperWindows temporal MATCH placement integration" {
         $text = (($words | ForEach-Object { $_.Text }) -join ' ')
         $sinMatch = @($output | Where-Object { $_ -is [string] -and $_ -match '^SIN MATCH$' })
         $rejected = @($output | Where-Object { $_ -is [string] -and $_ -match 'MATCH REJECTED BY TEMPORAL PLACEMENT GUARD' })
+        $orderViolations = 0
+        for ($i = 1; $i -lt $words.Count; $i++) {
+            if ($words[$i].From -lt $words[$i - 1].To) {
+                $orderViolations++
+            }
+        }
 
         $words.Count | Should Be 15
         $text | Should Match 'And I would like to extend a very special shout out to the 84 participants'
         $sinMatch.Count | Should Be 0
         $rejected.Count | Should Be 0
+        $orderViolations | Should Be 0
     }
 
-    It "does not accept a lexical MATCH when the current block begins before the accumulated prefix boundary" {
+    It "routes a lexical MATCH that starts before the accumulated prefix boundary into SIN MATCH" {
         $windows = @(
             [PSCustomObject]@{
                 Start = 0
@@ -97,10 +101,17 @@ Describe "Reconstruct-WhisperWindows temporal MATCH placement integration" {
         $words = @($output | Where-Object { $_.PSObject.Properties.Match('Id').Count })
         $sinMatch = @($output | Where-Object { $_ -is [string] -and $_ -match '^SIN MATCH$' })
         $rejected = @($output | Where-Object { $_ -is [string] -and $_ -match 'MATCH REJECTED BY TEMPORAL PLACEMENT GUARD' })
+        $orderViolations = 0
+        for ($i = 1; $i -lt $words.Count; $i++) {
+            if ($words[$i].From -lt $words[$i - 1].To) {
+                $orderViolations++
+            }
+        }
 
         $sinMatch.Count | Should Be 1
-        $rejected.Count | Should Be 1
+        $rejected.Count | Should Be 0
         $words.Count | Should Be 4
         $words[0].Text | Should Be 'participate'
+        $orderViolations | Should Be 0
     }
 }
