@@ -98,6 +98,140 @@ function Reconstruct-WhisperWindows {
             $previousOverlapMap = @{}
         }
 
+        if ($null -ne $match) {
+            $matchedWord = $prevOverlap[$match.PreviousStart]
+
+            if ($null -eq $matchedWord) {
+                Write-Host "ERROR: EL ELEMENTO DEL MATCH ES NULL"
+                $match = $null
+            }
+        }
+
+        if ($null -ne $match) {
+            # A match can select an anchor that was deferred by an earlier MATCH.
+            # Recover it into the accumulated transcript before calculating prefix.
+            $prefixCount = $null
+
+            if ($previousOverlapMap.ContainsKey($matchedWord.Id)) {
+                $prefixCount = $previousOverlapMap[$matchedWord.Id]
+            }
+
+            if ($null -eq $prefixCount) {
+                for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
+                    if ($finalWords[$idx].Id -eq $matchedWord.Id) {
+                        $prefixCount = $idx
+                        break
+                    }
+                }
+            }
+
+            if ($null -eq $prefixCount) {
+                $anchorText = ($matchedWord.Text.ToLower()).Trim()
+
+                if ($deferredWordsByText.ContainsKey($anchorText)) {
+                    $candidate = $null
+
+                    foreach ($deferred in @($deferredWordsByText[$anchorText])) {
+                        $sameFrom = [math]::Abs($deferred.From - $matchedWord.From) -le 0.000001
+                        $sameTo   = [math]::Abs($deferred.To   - $matchedWord.To)   -le 0.000001
+
+                        if ($sameFrom -and $sameTo) {
+                            $candidate = $deferred
+                            break
+                        }
+                    }
+
+                    if ($null -ne $candidate) {
+                        $insertAt = $finalWords.Count
+
+                        for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
+                            if ($finalWords[$idx].From -gt $candidate.From) {
+                                $insertAt = $idx
+                                break
+                            }
+                        }
+
+                        if ($insertAt -eq 0) {
+                            $finalWords = @($candidate) + $finalWords
+                        } elseif ($insertAt -eq $finalWords.Count) {
+                            $finalWords = @($finalWords) + $candidate
+                        } else {
+                            $finalWords = @($finalWords[0..($insertAt - 1)]) + $candidate + @($finalWords[$insertAt..($finalWords.Count - 1)])
+                        }
+
+                        $prefixCount = $insertAt
+                        Write-Host "RECUPERADO ANCLA DIFERIDA: '$($candidate.Text)'"
+
+                        $remaining = @(
+                            $deferredWordsByText[$anchorText] |
+                            Where-Object { $_.Id -ne $candidate.Id }
+                        )
+
+                        if ($remaining.Count -eq 0) {
+                            $deferredWordsByText.Remove($anchorText) | Out-Null
+                        } else {
+                            $deferredWordsByText[$anchorText] = $remaining
+                        }
+                    }
+                }
+            }
+
+            if ($null -eq $prefixCount) {
+                Write-Host "ERROR: EL ELEMENTO DEL MATCH NO TIENE MAPA"
+                $match = $null
+            }
+        }
+
+        if ($null -ne $match) {
+            if (
+                $prefixCount -lt 0 -or
+                $prefixCount -gt $finalWords.Count
+            ) {
+                Write-Host "ERROR: PREFIX COUNT INVALIDO"
+                Write-Host "PrefixCount = $prefixCount"
+                Write-Host "FinalCount  = $($finalWords.Count)"
+                $match = $null
+            }
+        }
+
+        $prefix = @()
+        $currentMatch = @()
+
+        if ($null -ne $match) {
+            if ($prefixCount -gt 0) {
+                $prefix = @(
+                    $finalWords |
+                    Select-Object -First $prefixCount
+                )
+            }
+
+            $currentMatch = @(
+                $currOverlap |
+                Select-Object `
+                    -Skip $match.CurrentStart `
+                    -First $match.CurrentConsumed
+            )
+
+            if ($currentMatch.Count -eq 0) {
+                Write-Host "MATCH INVALIDO"
+                $match = $null
+            }
+        }
+
+        if ($null -ne $match) {
+            if (
+                $prefix.Count -gt 0 -and
+                $currentMatch.Count -gt 0 -and
+                $currentMatch[0].From -lt $prefix[-1].To
+            ) {
+                Write-Host "MATCH REJECTED BY TEMPORAL PLACEMENT GUARD"
+                Write-Host "Previous anchor: '$($matchedWord.Text)' @ $($matchedWord.From)s"
+                Write-Host "Current anchor:  '$($currentMatch[0].Text)' @ $($currentMatch[0].From)s"
+                Write-Host "Accumulated prefix boundary: $($prefix[-1].To) s"
+                $match = $null
+            }
+        }
+
         if ($null -eq $match) {
             Write-Host "SIN MATCH"
 
@@ -458,128 +592,6 @@ function Reconstruct-WhisperWindows {
             continue
         }
 
-        $matchedWord = $prevOverlap[$match.PreviousStart]
-
-        if ($null -eq $matchedWord) {
-            Write-Host "ERROR: EL ELEMENTO DEL MATCH ES NULL"
-            continue
-        }
-
-        # A match can select an anchor that was deferred by an earlier MATCH.
-        # Recover it into the accumulated transcript before calculating prefix.
-        $prefixCount = $null
-
-        if ($previousOverlapMap.ContainsKey($matchedWord.Id)) {
-            $prefixCount = $previousOverlapMap[$matchedWord.Id]
-        }
-
-        if ($null -eq $prefixCount) {
-            for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
-                if ($finalWords[$idx].Id -eq $matchedWord.Id) {
-                    $prefixCount = $idx
-                    break
-                }
-            }
-        }
-
-        if ($null -eq $prefixCount) {
-            $anchorText = ($matchedWord.Text.ToLower()).Trim()
-
-            if ($deferredWordsByText.ContainsKey($anchorText)) {
-                $candidate = $null
-
-                foreach ($deferred in @($deferredWordsByText[$anchorText])) {
-                    $sameFrom = [math]::Abs($deferred.From - $matchedWord.From) -le 0.000001
-                    $sameTo   = [math]::Abs($deferred.To   - $matchedWord.To)   -le 0.000001
-
-                    if ($sameFrom -and $sameTo) {
-                        $candidate = $deferred
-                        break
-                    }
-                }
-
-                if ($null -ne $candidate) {
-                    $insertAt = $finalWords.Count
-
-                    for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
-                        if ($finalWords[$idx].From -gt $candidate.From) {
-                            $insertAt = $idx
-                            break
-                        }
-                    }
-
-                    if ($insertAt -eq 0) {
-                        $finalWords = @($candidate) + $finalWords
-                    } elseif ($insertAt -eq $finalWords.Count) {
-                        $finalWords = @($finalWords) + $candidate
-                    } else {
-                        $finalWords = @($finalWords[0..($insertAt - 1)]) + $candidate + @($finalWords[$insertAt..($finalWords.Count - 1)])
-                    }
-
-                    $prefixCount = $insertAt
-                    Write-Host "RECUPERADO ANCLA DIFERIDA: '$($candidate.Text)'"
-
-                    $remaining = @(
-                        $deferredWordsByText[$anchorText] |
-                        Where-Object { $_.Id -ne $candidate.Id }
-                    )
-
-                    if ($remaining.Count -eq 0) {
-                        $deferredWordsByText.Remove($anchorText) | Out-Null
-                    } else {
-                        $deferredWordsByText[$anchorText] = $remaining
-                    }
-                }
-            }
-        }
-
-        if ($null -eq $prefixCount) {
-            Write-Host "ERROR: EL ELEMENTO DEL MATCH NO TIENE MAPA"
-            continue
-        }
-
-        if (
-            $prefixCount -lt 0 -or
-            $prefixCount -gt $finalWords.Count
-        ) {
-            Write-Host "ERROR: PREFIX COUNT INVALIDO"
-            Write-Host "PrefixCount = $prefixCount"
-            Write-Host "FinalCount  = $($finalWords.Count)"
-            continue
-        }
-
-        $prefix = @()
-        if ($prefixCount -gt 0) {
-            $prefix = @(
-                $finalWords |
-                Select-Object -First $prefixCount
-            )
-        }
-
-        $currentMatch = @(
-            $currOverlap |
-            Select-Object `
-                -Skip $match.CurrentStart `
-                -First $match.CurrentConsumed
-        )
-
-        if ($currentMatch.Count -eq 0) {
-            Write-Host "MATCH INVALIDO"
-            continue
-        }
-
-        if (
-            $prefix.Count -gt 0 -and
-            $currentMatch.Count -gt 0 -and
-            $currentMatch[0].From -lt $prefix[-1].To
-        ) {
-            Write-Host "MATCH REJECTED BY TEMPORAL PLACEMENT GUARD"
-            Write-Host "Previous anchor: '$($matchedWord.Text)' @ $($matchedWord.From)s"
-            Write-Host "Current anchor:  '$($currentMatch[0].Text)' @ $($currentMatch[0].From)s"
-            Write-Host "Accumulated prefix boundary: $($prefix[-1].To) s"
-            $match = $null
-        }
-
         $overlapStartInCurrent = -1
 
         if ($currOverlap.Count -gt 0) {
@@ -620,7 +632,7 @@ function Reconstruct-WhisperWindows {
             $deferred = $currOverlap[$k]
             $deferredText = ($deferred.Text.ToLower()).Trim()
 
-            if ([string]::IsNullOrEmpty($deferred.Key)) {
+            if ([string]::IsNullOrEmpty($deferredText)) {
                 continue
             }
 
