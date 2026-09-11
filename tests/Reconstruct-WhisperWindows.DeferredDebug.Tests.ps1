@@ -6,25 +6,26 @@ Describe "deferred debug" {
     It "prints reconstruction diagnostics for duplicate deferred candidates" {
         $windows = @(
             [PSCustomObject]@{ Start=0.0; End=7.0; Tokens=@(
-                [PSCustomObject]@{ Text=' Uno'; From=0.0; To=1.0 }
-                [PSCustomObject]@{ Text=' Cinco'; From=4.0; To=5.0 }
-                [PSCustomObject]@{ Text=' Extra'; From=5.0; To=5.3 }
-                [PSCustomObject]@{ Text=' Extra'; From=5.3; To=5.6 }
-                [PSCustomObject]@{ Text=' Seis'; From=6.0; To=7.0 }
+                [PSCustomObject]@{ Text=' Uno';   From=0.0; To=1.0 }
+                [PSCustomObject]@{ Text=' Cinco'; From=4.0; To=4.5 }
+                [PSCustomObject]@{ Text=' Extra'; From=4.5; To=4.8 }
+                [PSCustomObject]@{ Text=' Extra'; From=4.8; To=5.1 }
+                [PSCustomObject]@{ Text=' Seis';  From=5.1; To=5.8 }
+                [PSCustomObject]@{ Text=' Siete'; From=5.8; To=6.8 }
             ) }
             [PSCustomObject]@{ Start=4.0; End=9.0; Tokens=@(
                 [PSCustomObject]@{ Text=' Extra'; From=4.0; To=4.3 }
                 [PSCustomObject]@{ Text=' Extra'; From=4.3; To=4.6 }
                 [PSCustomObject]@{ Text=' Cinco'; From=4.6; To=5.0 }
-                [PSCustomObject]@{ Text=' Seis'; From=5.0; To=5.8 }
-                [PSCustomObject]@{ Text=' Siete'; From=6.0; To=6.8 }
+                [PSCustomObject]@{ Text=' Seis';  From=5.0; To=5.7 }
+                [PSCustomObject]@{ Text=' Siete'; From=5.7; To=6.7 }
             ) }
             [PSCustomObject]@{ Start=4.1; End=10.0; Tokens=@(
                 [PSCustomObject]@{ Text=' Extra'; From=4.0; To=4.3 }
                 [PSCustomObject]@{ Text=' Extra'; From=4.3; To=4.6 }
                 [PSCustomObject]@{ Text=' Cinco'; From=4.6; To=5.1 }
-                [PSCustomObject]@{ Text=' Seis'; From=5.1; To=5.9 }
-                [PSCustomObject]@{ Text=' Ocho'; From=6.1; To=7.0 }
+                [PSCustomObject]@{ Text=' Seis';  From=5.1; To=5.9 }
+                [PSCustomObject]@{ Text=' Ocho';  From=6.1; To=7.0 }
             ) }
         )
 
