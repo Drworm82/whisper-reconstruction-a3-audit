@@ -106,9 +106,12 @@ El código debe:
 6. mostrar las transiciones `MATCH` / `SIN MATCH` emitidas por la reconstrucción;
 7. registrar el resultado de invariantes.
 
+La salida de reconstrucción se mantiene en la salida estándar del harness para que las líneas `MATCH` y `SIN MATCH` queden visibles en la evidencia de la ejecución.
+
 No se declara ningún resultado antes de esa ejecución local.
 
 ## Commits de implementación
 
 - `51e24614b617e1a6c2bb4ae757e99880109629a1` — Add controlled MATCH/DEDUP POC project
 - `792779ce74c0ebaff921b795ddab0736afbc0387` — Add controlled MATCH/DEDUP POC harness
+- `16773cc771e88c01e15fd149b64dc9fb0988b413` — Expose reconstruction MATCH logs in controlled POC
