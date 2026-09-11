@@ -16,7 +16,7 @@ Describe "MATCH temporal placement against accumulated prefix boundary" {
         $orderViolations = 0
 
         for ($i = 1; $i -lt $replacement.Count; $i++) {
-            if ($replacement[$i].From -lt $replacement[$i - 1].From) {
+            if ($replacement[$i].From -lt $replacement[$i - 1].To) {
                 $orderViolations++
             }
         }
@@ -42,7 +42,7 @@ Describe "MATCH temporal placement against accumulated prefix boundary" {
         $orderViolations = 0
 
         for ($i = 1; $i -lt $replacement.Count; $i++) {
-            if ($replacement[$i].From -lt $replacement[$i - 1].From) {
+            if ($replacement[$i].From -lt $replacement[$i - 1].To) {
                 $orderViolations++
             }
         }
