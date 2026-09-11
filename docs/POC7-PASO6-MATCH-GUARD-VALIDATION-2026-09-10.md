@@ -2,7 +2,7 @@
 
 **Fecha:** 2026-09-10  
 **Branch:** `reconstruction-fixes`  
-**Estado:** integrado; pendiente de validación local post-integración
+**Estado:** **PASS — validado localmente post-integración**
 
 ## Evidencia previa
 
@@ -56,27 +56,38 @@ Esto evita que el candidato temporalmente invertido llegue a `Reconstruct-Whispe
 
 El archivo experimental separado `src/Alignment/Find-WordOverlap-MatchGuard.ps1` permanece como referencia de la prueba controlada y no forma parte del flujo integrado.
 
-## Estado de validación
+## Validación local post-integración
 
-La integración remota está realizada, pero todavía requiere validación local después del `git pull`.
+El harness `AudioCapturePOC/MatchDedupPOC/InspectMatchDedup.ps1` fue ejecutado después de sincronizar la integración. Este harness carga directamente `Find-WordOverlap.ps1` y no carga el guard experimental.
 
-La prueba local debe confirmar como mínimo:
+La ejecución produjo:
 
-- `OrderViolations = 0`;
-- `DuplicateIds = 0`;
-- ausencia de excepciones;
-- conservación del contenido reconstruido esperado;
-- rechazo del candidato temporalmente invertido directamente desde `Find-WordOverlap.ps1`.
+- transición `0 -> 1`: candidato MATCH encontrado con `15` matches y `14` textos exactos; evidencia temporal dentro de tolerancia (`0.33 s` de diferencia en `From`, `0.27 s` en `To`, allowance `1.5 s`);
+- durante la reconstrucción `0s -> 2s`, el candidato problemático fue rechazado directamente por `Find-WordOverlap.ps1`;
+- transición `2s -> 4s`: `SIN MATCH`;
+- `ORDER VIOLATIONS: 0`;
+- `DUPLICATE IDS: 0`;
+- `FINAL WORD COUNT: 31`.
 
-## Siguiente comando local
-
-Después de sincronizar:
+Mensaje observado durante la reconstrucción:
 
 ```text
-git pull --rebase origin reconstruction-fixes
+MATCH REJECTED BY TEMPORAL PLACEMENT GUARD
+Previous anchor: 'in' @ 4.86s
+Current anchor:  'in' @ 4s
 ```
 
-Después ejecutar el harness integrado. No se debe cargar `Find-WordOverlap-MatchGuard.ps1`; la prueba debe demostrar que la corrección ya vive en `Find-WordOverlap.ps1`.
+La salida final mantuvo la secuencia temporalmente ordenada, sin IDs duplicados, y conservó 31 palabras reconstruidas.
+
+## Conclusión
+
+**PASS.** La corrección integrada en `Find-WordOverlap.ps1` reproduce el comportamiento validado del guard experimental sobre los JSON reales de la prueba controlada y elimina la regresión temporal observada previamente.
+
+La corrección queda validada para este caso controlado. Esto no demuestra todavía que la regla sea suficiente para todas las geometrías de ventanas, todos los patrones de habla ni una ejecución de larga duración.
+
+## Siguiente paso
+
+Crear una prueba de regresión aislada para la condición de placement temporal y ejecutarla junto con las pruebas de reconstrucción existentes antes de ampliar la geometría o avanzar al siguiente componente del pipeline.
 
 ## Commits
 
