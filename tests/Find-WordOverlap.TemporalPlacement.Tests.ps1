@@ -1,7 +1,7 @@
-Describe "Find-WordOverlap temporal MATCH placement guard" {
+Describe "Find-WordOverlap lexical alignment" {
     . "$PSScriptRoot/../src/Alignment/Find-WordOverlap.ps1"
 
-    It "rejects a selected MATCH whose current anchor starts earlier than the previous anchor" {
+    It "returns the lexical MATCH even when the current anchor starts earlier" {
         $previousWords = @(
             [PSCustomObject]@{ Key = 'uno'; Text = 'uno'; From = 4.86; To = 5.00 }
             [PSCustomObject]@{ Key = 'dos'; Text = 'dos'; From = 5.00; To = 5.20 }
@@ -16,7 +16,10 @@ Describe "Find-WordOverlap temporal MATCH placement guard" {
 
         $result = Find-WordOverlap $previousWords $currentWords
 
-        $result | Should Be $null
+        $result | Should Not Be $null
+        $result.Matches | Should Be 3
+        $result.PreviousStart | Should Be 0
+        $result.CurrentStart | Should Be 0
     }
 
     It "accepts a selected MATCH when the current anchor is chronologically valid" {
