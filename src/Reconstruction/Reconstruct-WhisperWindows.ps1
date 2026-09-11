@@ -632,7 +632,7 @@ function Reconstruct-WhisperWindows {
             $deferred = $currOverlap[$k]
             $deferredText = ($deferred.Text.ToLower()).Trim()
 
-            if ([string]::IsNullOrEmpty($deferredText)) {
+            if ([string]::IsNullOrEmpty($deferred.Key)) {
                 continue
             }
 
