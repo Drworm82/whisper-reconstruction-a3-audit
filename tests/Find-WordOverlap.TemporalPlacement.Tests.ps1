@@ -1,8 +1,6 @@
-BeforeAll {
-    . "$PSScriptRoot/../src/Alignment/Find-WordOverlap.ps1"
-}
-
 Describe "Find-WordOverlap temporal MATCH placement guard" {
+    . "$PSScriptRoot/../src/Alignment/Find-WordOverlap.ps1"
+
     It "rejects a selected MATCH whose current anchor starts earlier than the previous anchor" {
         $previousWords = @(
             [PSCustomObject]@{ Key = 'uno'; Text = 'uno'; From = 4.86; To = 5.00 }
@@ -18,7 +16,7 @@ Describe "Find-WordOverlap temporal MATCH placement guard" {
 
         $result = Find-WordOverlap $previousWords $currentWords
 
-        $result | Should -BeNullOrEmpty
+        $result | Should Be $null
     }
 
     It "accepts a selected MATCH when the current anchor is chronologically valid" {
@@ -36,9 +34,9 @@ Describe "Find-WordOverlap temporal MATCH placement guard" {
 
         $result = Find-WordOverlap $previousWords $currentWords
 
-        $result | Should -Not -BeNullOrEmpty
-        $result.Matches | Should -Be 3
-        $result.PreviousStart | Should -Be 0
-        $result.CurrentStart | Should -Be 0
+        $result | Should Not Be $null
+        $result.Matches | Should Be 3
+        $result.PreviousStart | Should Be 0
+        $result.CurrentStart | Should Be 0
     }
 }
