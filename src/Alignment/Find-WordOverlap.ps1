@@ -4,7 +4,6 @@
 function Find-WordOverlap {
     param($previousWords, $currentWords)
 
-
     $best = $null
 
     for ($i = 0; $i -lt $previousWords.Count; $i++) {
@@ -217,6 +216,29 @@ function Find-WordOverlap {
                 }
             }
         }
+    }
+
+    if ($null -eq $best) {
+        return $null
+    }
+
+    if (
+        $best.PreviousStart -lt 0 -or
+        $best.PreviousStart -ge $previousWords.Count -or
+        $best.CurrentStart -lt 0 -or
+        $best.CurrentStart -ge $currentWords.Count
+    ) {
+        return $best
+    }
+
+    $previousAnchor = $previousWords[$best.PreviousStart]
+    $currentAnchor  = $currentWords[$best.CurrentStart]
+
+    if ([double]$currentAnchor.From -lt [double]$previousAnchor.From) {
+        Write-Host "MATCH REJECTED BY TEMPORAL PLACEMENT GUARD"
+        Write-Host "Previous anchor: '$($previousAnchor.Text)' @ $($previousAnchor.From)s"
+        Write-Host "Current anchor:  '$($currentAnchor.Text)' @ $($currentAnchor.From)s"
+        return $null
     }
 
     return $best
