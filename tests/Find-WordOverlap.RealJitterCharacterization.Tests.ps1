@@ -1,7 +1,7 @@
 Describe "Find-WordOverlap real-audio jitter characterization" {
     . "$PSScriptRoot/../src/Alignment/Find-WordOverlap.ps1"
 
-    It "characterizes the I-through-84 overlap without changing the production algorithm" {
+    It "selects the full I-through-84 overlap from the captured real-audio pattern" {
         $previousWords = @(
             [PSCustomObject]@{ Key = 'and'; Text = 'And'; From = 2.84; To = 4.00 }
             [PSCustomObject]@{ Key = 'i'; Text = 'I'; From = 4.37; To = 4.49 }
@@ -38,6 +38,12 @@ Describe "Find-WordOverlap real-audio jitter characterization" {
 
         $result = Find-WordOverlap $previousWords $currentWords
 
-        $result | Should Be $null
+        $result | Should Not Be $null
+        $result.Matches | Should Be 14
+        $result.ExactTextMatches | Should Be 14
+        $result.PreviousStart | Should Be 0
+        $result.CurrentStart | Should Be 0
+        $result.PreviousEnd | Should Be 14
+        $result.CurrentEnd | Should Be 14
     }
 }
