@@ -7,77 +7,34 @@ function Find-WordOverlap {
     $best = $null
 
     for ($i = 0; $i -lt $previousWords.Count; $i++) {
-
         for ($j = 0; $j -lt $currentWords.Count; $j++) {
-
             $pi = $i
             $cj = $j
-
             $matches = 0
             $exactTextMatches = 0
             $skippedPrevious = 0
             $skippedCurrent = 0
 
-            while (
-                $pi -lt $previousWords.Count -and
-                $cj -lt $currentWords.Count
-            ) {
-
-                if (
-                    $previousWords[$pi].Key -ne '' -and
-                    $currentWords[$cj].Key -ne '' -and
-                    $previousWords[$pi].Key -eq
-                    $currentWords[$cj].Key
-                ) {
-
+            while ($pi -lt $previousWords.Count -and $cj -lt $currentWords.Count) {
+                if ($previousWords[$pi].Key -ne '' -and $currentWords[$cj].Key -ne '' -and $previousWords[$pi].Key -eq $currentWords[$cj].Key) {
                     $matches++
-
-                    if (
-                        $previousWords[$pi].Text.Trim() -eq
-                        $currentWords[$cj].Text.Trim()
-                    ) {
+                    if ($previousWords[$pi].Text.Trim() -eq $currentWords[$cj].Text.Trim()) {
                         $exactTextMatches++
                     }
-
                     $pi++
                     $cj++
-
                     continue
                 }
 
-                # ------------------------------------------------
-                # CURRENT tiene una palabra extra
-                # ------------------------------------------------
-
-                if (
-                    ($cj + 1) -lt $currentWords.Count -and
-                    $previousWords[$pi].Key -ne '' -and
-                    $currentWords[$cj + 1].Key -ne '' -and
-                    $previousWords[$pi].Key -eq
-                    $currentWords[$cj + 1].Key
-                ) {
-
+                if (($cj + 1) -lt $currentWords.Count -and $previousWords[$pi].Key -ne '' -and $currentWords[$cj + 1].Key -ne '' -and $previousWords[$pi].Key -eq $currentWords[$cj + 1].Key) {
                     $cj++
                     $skippedCurrent++
-
                     continue
                 }
 
-                # ------------------------------------------------
-                # PREVIOUS tiene una palabra extra
-                # ------------------------------------------------
-
-                if (
-                    ($pi + 1) -lt $previousWords.Count -and
-                    $previousWords[$pi + 1].Key -ne '' -and
-                    $currentWords[$cj].Key -ne '' -and
-                    $previousWords[$pi + 1].Key -eq
-                    $currentWords[$cj].Key
-                ) {
-
+                if (($pi + 1) -lt $previousWords.Count -and $previousWords[$pi + 1].Key -ne '' -and $currentWords[$cj].Key -ne '' -and $previousWords[$pi + 1].Key -eq $currentWords[$cj].Key) {
                     $pi++
                     $skippedPrevious++
-
                     continue
                 }
 
@@ -88,130 +45,53 @@ function Find-WordOverlap {
                 continue
             }
 
-            # ----------------------------------------------------
-            # Medir la calidad temporal del match
-            # ----------------------------------------------------
-
             $startPrevious = $previousWords[$i].From
             $startCurrent  = $currentWords[$j].From
-
-            $endPrevious =
-                $previousWords[$pi - 1].To
-
-            $endCurrent =
-                $currentWords[$cj - 1].To
-
-            $durationPrevious =
-                $endPrevious - $startPrevious
-
-            $durationCurrent =
-                $endCurrent - $startCurrent
-
-            $durationDifference =
-                [math]::Abs(
-                    $durationPrevious -
-                    $durationCurrent
-                )
+            $endPrevious   = $previousWords[$pi - 1].To
+            $endCurrent    = $currentWords[$cj - 1].To
+            $durationPrevious = $endPrevious - $startPrevious
+            $durationCurrent  = $endCurrent - $startCurrent
+            $durationDifference = [math]::Abs($durationPrevious - $durationCurrent)
 
             $candidate = [PSCustomObject]@{
-
                 Matches = $matches
-
-                ExactTextMatches =
-                    $exactTextMatches
-
+                ExactTextMatches = $exactTextMatches
                 PreviousStart = $i
-                CurrentStart  = $j
-
+                CurrentStart = $j
                 PreviousEnd = $pi
-                CurrentEnd  = $cj
-
-                PreviousConsumed =
-                    $pi - $i
-
-                CurrentConsumed =
-                    $cj - $j
-
-                SkippedPrevious =
-                    $skippedPrevious
-
-                SkippedCurrent =
-                    $skippedCurrent
-
-                DurationDifference =
-                    $durationDifference
+                CurrentEnd = $cj
+                PreviousConsumed = $pi - $i
+                CurrentConsumed = $cj - $j
+                SkippedPrevious = $skippedPrevious
+                SkippedCurrent = $skippedCurrent
+                DurationDifference = $durationDifference
             }
-
-            # ----------------------------------------------------
-            # CRITERIO DE SELECCION
-            #
-            # 1. Más matches con texto idéntico (identidad del bloque)
-            # 2. Más matches (coincidencia de Keys)
-            # 3. Menos palabras saltadas
-            # 4. Menor diferencia temporal
-            # ----------------------------------------------------
 
             if ($null -eq $best) {
-
                 $best = $candidate
-
                 continue
             }
 
-            if (
-                $candidate.ExactTextMatches -gt
-                $best.ExactTextMatches
-            ) {
-
+            if ($candidate.ExactTextMatches -gt $best.ExactTextMatches) {
                 $best = $candidate
-
                 continue
             }
 
-            if (
-                $candidate.ExactTextMatches -eq
-                $best.ExactTextMatches -and
-                $candidate.Matches -gt
-                $best.Matches
-            ) {
-
+            if ($candidate.ExactTextMatches -eq $best.ExactTextMatches -and $candidate.Matches -gt $best.Matches) {
                 $best = $candidate
-
                 continue
             }
 
-            if (
-                $candidate.ExactTextMatches -eq
-                $best.ExactTextMatches -and
-                $candidate.Matches -eq
-                $best.Matches
-            ) {
+            if ($candidate.ExactTextMatches -eq $best.ExactTextMatches -and $candidate.Matches -eq $best.Matches) {
+                $candidateSkipped = $candidate.SkippedPrevious + $candidate.SkippedCurrent
+                $bestSkipped = $best.SkippedPrevious + $best.SkippedCurrent
 
-                $candidateSkipped =
-                    $candidate.SkippedPrevious +
-                    $candidate.SkippedCurrent
-
-                $bestSkipped =
-                    $best.SkippedPrevious +
-                    $best.SkippedCurrent
-
-                if (
-                    $candidateSkipped -lt
-                    $bestSkipped
-                ) {
-
+                if ($candidateSkipped -lt $bestSkipped) {
                     $best = $candidate
-
                     continue
                 }
 
-                if (
-                    $candidateSkipped -eq
-                    $bestSkipped -and
-                    $candidate.DurationDifference -lt
-                    $best.DurationDifference
-                ) {
-
+                if ($candidateSkipped -eq $bestSkipped -and $candidate.DurationDifference -lt $best.DurationDifference) {
                     $best = $candidate
                 }
             }
@@ -222,13 +102,28 @@ function Find-WordOverlap {
         return $null
     }
 
-    if (
-        $best.PreviousStart -lt 0 -or
-        $best.PreviousStart -ge $previousWords.Count -or
-        $best.CurrentStart -lt 0 -or
-        $best.CurrentStart -ge $currentWords.Count
-    ) {
+    if ($best.PreviousStart -lt 0 -or $best.PreviousStart -ge $previousWords.Count -or $best.CurrentStart -lt 0 -or $best.CurrentStart -ge $currentWords.Count) {
         return $best
+    }
+
+    # Reconstruction owns the accumulated transcript. During the production
+    # call, the caller scope contains $finalWords; validate the selected
+    # candidate against that prefix boundary before Reconstruct applies it.
+    # Standalone Find-WordOverlap calls intentionally remain lexical-only.
+    $callerFinalWords = Get-Variable -Name finalWords -Scope 1 -ValueOnly -ErrorAction SilentlyContinue
+
+    if ($null -ne $callerFinalWords -and @($callerFinalWords).Count -gt 0) {
+        $matchedPreviousAnchor = $previousWords[$best.PreviousStart]
+        $currentAnchor = $currentWords[$best.CurrentStart]
+        $prefixBoundary = @($callerFinalWords)[-1].To
+
+        if ([double]$currentAnchor.From -lt [double]$prefixBoundary) {
+            Write-Host "MATCH REJECTED BY TEMPORAL PLACEMENT GUARD"
+            Write-Host "Previous anchor: '$($matchedPreviousAnchor.Text)' @ $($matchedPreviousAnchor.From)s"
+            Write-Host "Current anchor:  '$($currentAnchor.Text)' @ $($currentAnchor.From)s"
+            Write-Host "Accumulated prefix boundary: $prefixBoundary s"
+            return $null
+        }
     }
 
     return $best
