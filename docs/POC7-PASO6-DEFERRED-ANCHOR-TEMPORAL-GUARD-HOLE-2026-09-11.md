@@ -1,14 +1,14 @@
-# POC7 Paso 6 — Deferred-anchor temporal guard hole
+# POC7 Paso 6 — Deferred-anchor temporal guard: resolución
 
 **Fecha:** 2026-09-11  
 **Rama:** `poc7-paso6-temporal-guard-clean`  
-**Estado:** hallazgo caracterizado; no se propone todavía un cambio de producción.
+**Estado:** implementado y validado.
 
 ## 1. Contexto
 
 Paso 6 mueve la validación de colocación temporal desde `Find-WordOverlap.ps1` hacia `Reconstruct-WhisperWindows.ps1`, donde existe el estado acumulado necesario para decidir si un MATCH puede sustituir correctamente el prefijo reconstruido.
 
-La regla temporal actualmente caracterizada es:
+La regla temporal implementada es:
 
 ```powershell
 $prefix.Count -gt 0 -and
@@ -16,134 +16,111 @@ $currentMatch.Count -gt 0 -and
 $currentMatch[0].From -lt $prefix[-1].To
 ```
 
-Si la condición es verdadera, el MATCH debe ser rechazado (`$match = $null`) para que continúe la rama existente de `SIN MATCH`.
+Si la condición es verdadera, el MATCH se rechaza (`$match = $null`) y el flujo continúa por la rama existente de `SIN MATCH`.
 
-La implementación actual del guard intenta resolver la frontera del prefijo mediante `$previousOverlapMap` y, como respaldo, mediante una búsqueda en `$finalWords`.
+La comparación es estrictamente `<`: una coincidencia exacta con la frontera (`current.From == prefix[-1].To`) se acepta. Si no existe prefijo acumulado, el guard no rechaza el MATCH.
 
-## 2. Fixture mínimo de tres ventanas
+## 2. Hallazgo inicial: hueco con anclas diferidas
 
-El siguiente fixture caracteriza específicamente la interacción con `$deferredWordsByText`.
+El análisis del flujo mostró que una validación temporal colocada antes de resolver completamente `$prefixCount` podía no disponer de la frontera real del prefijo cuando el ancla seleccionada había sido diferida por un MATCH anterior.
 
-### W0 — ventana base
-
-```text
-Uno    0.0 → 1.0
-Dos    1.0 → 2.0
-Tres   2.0 → 3.0
-Cuatro 3.0 → 4.0
-Cinco  4.0 → 5.0
-Seis   5.0 → 6.0
-Siete  6.0 → 7.0
-```
-
-### W1 — introduce `Extra` antes del MATCH
+El fixture mínimo utilizado para caracterizar el caso fue de tres ventanas:
 
 ```text
-Extra  4.0 → 4.3
-Cinco  4.3 → 5.0
-Seis   5.0 → 6.0
-Siete  6.0 → 6.8
+W0: Uno, Dos, Tres, Cuatro, Cinco, Seis, Siete
+W1: Extra, Cinco, Seis, Siete
+W2: Extra, Cinco, Seis, Ocho
 ```
 
-En W0 → W1, la zona de overlap es `[4.0, 7.0)`.
+En W0 → W1, `Extra` queda antes del MATCH y se conserva en `$deferredWordsByText`. En W1 → W2, `Extra` vuelve a aparecer como ancla y puede recuperarse desde los diferidos.
 
-El mejor MATCH es:
+La variante crítica utiliza:
 
 ```text
-PreviousStart  = 0
-CurrentStart   = 1
-PreviousConsumed = 3
-CurrentConsumed  = 3
+W1 Extra: 4.0 → 4.3
+W2 Extra: 3.9 → 4.4
 ```
 
-Por tanto, `Extra` queda antes del MATCH y entra en `$deferredWordsByText` en lugar de `$finalWords`.
+Después de la recuperación, el prefijo termina en `4.0`, mientras que el `From` del `Extra` actual es `3.9`; por tanto, la condición temporal debe rechazar el MATCH.
 
-El guard no rechaza este MATCH porque la frontera acumulada es `4.0` y el primer elemento del MATCH es `Cinco`, cuyo `From` es `4.3`.
+## 3. Corrección del flujo de control
 
-Estado conceptual tras W0 → W1:
+La validación temporal se colocó **después de completar la resolución de `$prefixCount`**, incluida la recuperación desde `$deferredWordsByText`, y después de construir `$prefix` y `$currentMatch`.
+
+El flujo relevante queda conceptualmente así:
 
 ```text
-$finalWords = Uno, Dos, Tres, Cuatro, Cinco, Seis, Siete
-$deferredWordsByText["extra"] = Extra(4.0 → 4.3, Id "1-0")
+Find-WordOverlap
+  → resolver ancla seleccionada
+  → resolver prefixCount
+       ├─ previousOverlapMap
+       ├─ finalWords
+       └─ deferredWordsByText
+  → construir prefix/currentMatch
+  → validar colocación temporal
+  → si match == null: rama existente SIN MATCH
+  → si no: continuación normal de MATCH
 ```
 
-### W2 — recupera `Extra` como ancla
+Esto es importante porque en PowerShell asignar `$match = $null` después de haber pasado por una rama anterior de `SIN MATCH` no hace que el flujo vuelva atrás para ejecutar esa rama. La solución, por tanto, no duplica `SIN MATCH`: establece un único punto de dispatch después de toda la validación de MATCH.
 
-Para forzar la ruta de recuperación diferida, W2 comienza en `4.1`:
+Se preserva la lógica existente de `SIN MATCH`, incluidos deduplicación, aliases, diferidos y orden cronológico.
+
+## 4. Evidencia reproducible
+
+La fixture diferida produjo los siguientes diagnósticos durante W1 → W2:
 
 ```text
-Extra  3.9 → 4.4
-Cinco  4.4 → 5.1
-Seis   5.1 → 6.1
-Ocho   6.1 → 7.0
+TRANSICION 4s -> 4.1s
+RECUPERADO ANCLA DIFERIDA: 'Extra'
+MATCH REJECTED BY TEMPORAL PLACEMENT GUARD
+Previous anchor: 'Extra' @ 4s
+Current anchor:  'Extra' @ 3.9s
+Accumulated prefix boundary: 4 s
+SIN MATCH
 ```
 
-El `From=3.9` de `Extra` es intencional. El `To=4.4` se mantiene para que `Extra` permanezca dentro de la zona de overlap `[4.1, 9.0)`.
+La evidencia demuestra que el guard se ejecuta después de la recuperación del ancla diferida y que el MATCH inválido entra en la ruta existente de `SIN MATCH`.
 
-En W1 → W2, el mejor MATCH es:
+## 5. Pruebas de regresión
 
-```text
-PreviousStart = 0
-CurrentStart  = 0
-CurrentConsumed = 3
-```
+La cobertura validada en la rama `poc7-paso6-temporal-guard-clean` es:
 
-El ancla previa es `Extra` de W1, con Id `"1-0"`.
+| Prueba | Resultado |
+|---|---:|
+| `Find-WordOverlap.TemporalPlacement.Tests.ps1` | 2/2 PASS |
+| `Find-WordOverlap.TemporalPlacementBoundary.Tests.ps1` | 2/2 PASS |
+| `Reconstruct-WhisperWindows.TemporalBoundaryCharacterization.Tests.ps1` | 2/2 PASS |
+| `Reconstruct-WhisperWindows.TemporalBoundaryIntegration.Tests.ps1` | 2/2 PASS |
+| `Reconstruct-WhisperWindows.DeferredAnchorTemporal.Tests.ps1` | 1/1 PASS |
+| **Total** | **9/9 PASS** |
 
-## 3. Hueco demostrado en el guard
+La prueba específica de ancla diferida verifica que:
 
-En el momento en que se ejecuta el guard:
+- se recupera exactamente un ancla diferida;
+- se produce exactamente un rechazo temporal;
+- se entra exactamente una vez en `SIN MATCH`;
+- se conserva el resultado esperado de 9 palabras;
+- `Extra` recuperado conserva su posición inicial esperada;
+- la reconstrucción termina con `Ocho` como última palabra del fixture.
 
-```text
-$guardMatchedWord = $prevOverlap[0] = Extra (Id "1-0")
-```
+## 6. Alcance arquitectónico
 
-Pero ese Id no existe en `$previousOverlapMap`, porque `$finalWords` todavía no contiene `Extra`.
+`Find-WordOverlap.ps1` permanece como capa de alineación léxica. No se reintroduce allí la regla temporal basada en el transcript acumulado.
 
-Tampoco aparece mediante el escaneo de `$finalWords`.
+`Reconstruct-WhisperWindows.ps1` es la capa que decide si el MATCH léxico es temporalmente válido frente al prefijo acumulado.
 
-Consecuencia:
+No se modifica como parte de esta resolución:
 
-```text
-$guardPrefixCount = $null
-```
+- la geometría de ventanas;
+- `Build-WhisperWords`;
+- la lógica histórica de `SIN MATCH`;
+- la geometría de audio;
+- las reglas de `Convert`/`Build` existentes.
 
-y el guard termina sin evaluar ninguna comparación temporal.
+## 7. Geometría de producción y alcance de la fixture
 
-Posteriormente, la lógica normal de MATCH sí dispone de un tercer mecanismo: consulta `$deferredWordsByText`, encuentra el `Extra` diferido, lo recupera y lo inserta en `$finalWords`.
-
-Esto demuestra una divergencia entre la información que utiliza el guard y la información que utiliza la resolución real de `$prefixCount`.
-
-## 4. Violación temporal reproducible
-
-Con W2.`Extra.From = 3.9`, después de la recuperación diferida, la reconstrucción tiene conceptualmente:
-
-```text
-$prefix = Uno, Dos, Tres, Cuatro
-$prefix[-1].To = 4.0
-
-$currentMatch[0] = Extra(W2)
-$currentMatch[0].From = 3.9
-```
-
-Por tanto:
-
-```text
-3.9 < 4.0
-```
-
-La regla temporal es verdadera, pero el guard que se ejecuta antes de la recuperación diferida nunca llega a evaluarla.
-
-El resultado sintético observado es una secuencia cuyo orden temporal de inicio contiene:
-
-```text
-Cuatro  3.0 → 4.0
-Extra   3.9 → 4.4
-```
-
-Es decir, `Extra` comienza antes de que termine el prefijo acumulado. Este caso caracteriza una violación real de la regla temporal en la rama de recuperación diferida.
-
-## 5. Geometría de producción
+La fixture de tres ventanas es deliberadamente sintética para alcanzar de forma controlada la rama de recuperación diferida. No debe interpretarse como una demostración de que el mismo patrón tenga alta frecuencia bajo la geometría normal de producción.
 
 Con ventanas uniformes de duración `W` y paso `S`, la zona de overlap de la transición `i` es:
 
@@ -151,60 +128,34 @@ Con ventanas uniformes de duración `W` y paso `S`, la zona de overlap de la tra
 zone_i = [i·S, (i-1)·S + W)
 ```
 
-y la siguiente:
-
-```text
-zone_(i+1) = [(i+1)·S, i·S + W)
-```
-
 Para los parámetros documentados de producción (`W=5s`, `S=4s`):
 
 ```text
-zone_i     = [4i, 4i + 1)
-zone_i+1   = [4i + 4, 4i + 5)
+zone_i = [4i, 4i + 1)
 ```
 
-Las zonas consecutivas están separadas por 3 segundos.
+Las zonas consecutivas están separadas por 3 segundos. La alcanzabilidad de la rama diferida bajo esa geometría y las duraciones reales de tokens requiere una caracterización separada; no se afirma aquí que sea un caso frecuente en producción.
 
-Esto hace que el fixture anterior sea una construcción sintética para alcanzar la rama diferida consecutiva. La existencia del hueco lógico está demostrada independientemente de su frecuencia de activación en producción.
+## 8. Cuestión separada: posibles diferidos huérfanos
 
-No se establece en este documento que la rama sea alcanzable con palabras normales de Whisper bajo la geometría de producción. Esa cuestión requiere una caracterización separada del filtro de overlap, la posición posible del diferido dentro de la ventana y las duraciones máximas plausibles de los tokens.
+El análisis sigue dejando una cuestión independiente: una palabra almacenada en `$deferredWordsByText` podría no volver a aparecer como ancla recuperable en una transición posterior bajo ciertas geometrías.
 
-## 6. Hallazgo arquitectónico
+Esto **no forma parte de la resolución temporal de Paso 6** y queda como asunto separado para una auditoría posterior. No se introduce ninguna modificación para resolverlo en este paso.
 
-El guard temporal actual duplica parcialmente la resolución de `$prefixCount`:
+## 9. Estado final
+
+Paso 6 queda **implementado y validado** en `poc7-paso6-temporal-guard-clean`.
+
+La resolución mantiene la separación de responsabilidades:
 
 ```text
-Guard:
-  previousOverlapMap
-  └── búsqueda en finalWords
+Find-WordOverlap
+  = alineación léxica
 
-Resolución real de MATCH:
-  previousOverlapMap
-  ├── búsqueda en finalWords
-  └── recuperación desde deferredWordsByText
+Reconstruct-WhisperWindows
+  = validación temporal contra transcript acumulado
 ```
 
-Por tanto, el guard puede carecer del estado que la reconstrucción utiliza posteriormente para establecer la frontera temporal real.
+El guard temporal se ejecuta con el prefijo ya resuelto, incluyendo recuperación de anclas diferidas, y un MATCH rechazado entra por el único dispatch existente de `SIN MATCH`.
 
-Este documento **no prescribe todavía** si la solución correcta es ampliar el guard para conocer los diferidos o trasladar la validación a un punto posterior de la reconstrucción, una vez resuelto definitivamente el prefijo. Esa decisión queda pendiente de la auditoría del flujo completo.
-
-## 7. Hallazgo separado: posibles diferidos huérfanos
-
-El mismo análisis revela una cuestión independiente: bajo la geometría actual de producción, una palabra que se almacena en `$deferredWordsByText` puede no volver a aparecer como ancla recuperable en una transición posterior.
-
-Esto no se clasifica aquí como parte del bug temporal de Paso 6. Debe analizarse por separado como posible pérdida silenciosa de palabras diferidas.
-
-## 8. Alcance y estado
-
-Este documento caracteriza un hueco de cobertura del guard y un caso sintético reproducible de violación temporal en la rama diferida.
-
-No modifica:
-
-- `Find-WordOverlap.ps1`
-- `Reconstruct-WhisperWindows.ps1`
-- la geometría de ventanas
-- `Build-WhisperWords`
-- la lógica existente de `SIN MATCH`
-
-La implementación de Paso 6 permanece en el estado validado del commit `bbf3725` hasta que se determine el punto correcto de validación y se añadan las pruebas correspondientes.
+La batería de regresión ejecutada después de la corrección finaliza en **9/9 PASS**.
