@@ -98,6 +98,50 @@ function Reconstruct-WhisperWindows {
             $previousOverlapMap = @{}
         }
 
+        if ($null -ne $match) {
+            $guardMatchedWord = $prevOverlap[$match.PreviousStart]
+            $guardPrefixCount = $null
+
+            if ($null -ne $guardMatchedWord) {
+                if ($previousOverlapMap.ContainsKey($guardMatchedWord.Id)) {
+                    $guardPrefixCount = $previousOverlapMap[$guardMatchedWord.Id]
+                } else {
+                    for ($guardIdx = 0; $guardIdx -lt $finalWords.Count; $guardIdx++) {
+                        if ($finalWords[$guardIdx].Id -eq $guardMatchedWord.Id) {
+                            $guardPrefixCount = $guardIdx
+                            break
+                        }
+                    }
+                }
+            }
+
+            if ($null -ne $guardPrefixCount -and $guardPrefixCount -gt 0) {
+                $prefix = @(
+                    $finalWords |
+                    Select-Object -First $guardPrefixCount
+                )
+
+                $currentMatch = @(
+                    $currOverlap |
+                    Select-Object `
+                        -Skip $match.CurrentStart `
+                        -First $match.CurrentConsumed
+                )
+
+                if (
+                    $prefix.Count -gt 0 -and
+                    $currentMatch.Count -gt 0 -and
+                    $currentMatch[0].From -lt $prefix[-1].To
+                ) {
+                    Write-Host "MATCH REJECTED BY TEMPORAL PLACEMENT GUARD"
+                    Write-Host "Previous anchor: '$($guardMatchedWord.Text)' @ $($guardMatchedWord.From)s"
+                    Write-Host "Current anchor:  '$($currentMatch[0].Text)' @ $($currentMatch[0].From)s"
+                    Write-Host "Accumulated prefix boundary: $($prefix[-1].To) s"
+                    $match = $null
+                }
+            }
+        }
+
         if ($null -eq $match) {
             Write-Host "SIN MATCH"
 

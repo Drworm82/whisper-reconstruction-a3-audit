@@ -106,37 +106,5 @@ function Find-WordOverlap {
         return $best
     }
 
-    # Reconstruction owns the accumulated transcript. During a production
-    # call, the caller scope contains $finalWords. Validate the selected
-    # anchor against the word immediately preceding that anchor. Standalone
-    # Find-WordOverlap calls remain lexical-only because no $finalWords scope
-    # is present.
-    $callerFinalWords = Get-Variable -Name finalWords -Scope 1 -ValueOnly -ErrorAction SilentlyContinue
-
-    if ($null -ne $callerFinalWords -and @($callerFinalWords).Count -gt 0) {
-        $matchedPreviousAnchor = $previousWords[$best.PreviousStart]
-        $currentAnchor = $currentWords[$best.CurrentStart]
-        $matchedIndex = -1
-
-        for ($idx = 0; $idx -lt @($callerFinalWords).Count; $idx++) {
-            if (@($callerFinalWords)[$idx].Id -eq $matchedPreviousAnchor.Id) {
-                $matchedIndex = $idx
-                break
-            }
-        }
-
-        if ($matchedIndex -gt 0) {
-            $prefixBoundary = @($callerFinalWords)[$matchedIndex - 1].To
-
-            if ([double]$currentAnchor.From -lt [double]$prefixBoundary) {
-                Write-Host "MATCH REJECTED BY TEMPORAL PLACEMENT GUARD"
-                Write-Host "Previous anchor: '$($matchedPreviousAnchor.Text)' @ $($matchedPreviousAnchor.From)s"
-                Write-Host "Current anchor:  '$($currentAnchor.Text)' @ $($currentAnchor.From)s"
-                Write-Host "Accumulated prefix boundary: $prefixBoundary s"
-                return $null
-            }
-        }
-    }
-
     return $best
 }
