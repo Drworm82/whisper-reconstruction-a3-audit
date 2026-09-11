@@ -215,17 +215,18 @@ for ($i = 0; $i -lt $paths.Count; $i++) {{
     }}
     $buildCounts += @((Build-WhisperWords $tokens -WindowIndex $i).Count)
 }}
-$result = @(Reconstruct-WhisperWindows $windows) 6>&2
-$ids = @($result | ForEach-Object {{ $_.Id }})
+$result = @(Reconstruct-WhisperWindows $windows) 6>&1
+$ids = @($result | Where-Object {{ $_.PSObject.Properties.Name -contains 'Id' }} | ForEach-Object {{ $_.Id }})
+$wordObjects = @($result | Where-Object {{ $_.PSObject.Properties.Name -contains 'Id' }})
 $duplicates = @($ids | Group-Object | Where-Object Count -gt 1)
 $orderViolations = 0
-for ($i = 1; $i -lt $result.Count; $i++) {{
-    if ([double]$result[$i].From -lt [double]$result[$i - 1].From) {{ $orderViolations++ }}
+for ($i = 1; $i -lt $wordObjects.Count; $i++) {{
+    if ([double]$wordObjects[$i].From -lt [double]$wordObjects[$i - 1].From) {{ $orderViolations++ }}
 }}
 [PSCustomObject]@{{
     Windows = $windows.Count
     BuildCounts = ($buildCounts -join ',')
-    ReconstructedWords = $result.Count
+    ReconstructedWords = $wordObjects.Count
     DuplicateIds = $duplicates.Count
     OrderViolations = $orderViolations
 }} | ConvertTo-Json -Compress
@@ -234,10 +235,9 @@ for ($i = 1; $i -lt $result.Count; $i++) {{
 var reconstructionOutput = await RunPowerShellAsync(reconstructionCommand);
 Console.WriteLine(reconstructionOutput);
 
-var matchLines = reconstructionOutput.Length == 0 ? 0 : 0;
 Console.WriteLine();
 Console.WriteLine("=== CRITERIO ===");
-Console.WriteLine("El log de Reconstruct-WhisperWindows se conserva en stderr para inspeccionar explicitamente MATCH frente a SIN MATCH.");
+Console.WriteLine("La salida de Reconstruct-WhisperWindows se incluye aqui para inspeccionar explicitamente MATCH frente a SIN MATCH.");
 Console.WriteLine("Este POC solo sera PASS si la salida contiene al menos un MATCH real y las invariantes finales son correctas.");
 
 record WhisperToken(string Text, double From, double To);
