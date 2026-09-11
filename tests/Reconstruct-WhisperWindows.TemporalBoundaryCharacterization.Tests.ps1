@@ -14,7 +14,7 @@ Describe "Reconstruct-WhisperWindows MATCH placement boundary" {
         $orderViolations = 0
 
         for ($i = 1; $i -lt $newFinal.Count; $i++) {
-            if ($newFinal[$i].From -lt $newFinal[$i - 1].From) {
+            if ($newFinal[$i].From -lt $newFinal[$i - 1].To) {
                 $orderViolations++
             }
         }
@@ -26,7 +26,7 @@ Describe "Reconstruct-WhisperWindows MATCH placement boundary" {
         $orderViolations | Should Be 0
     }
 
-    It "produces a temporal regression when current MATCH starts before accumulated prefix boundary" {
+    It "detects a temporal regression when current MATCH starts before accumulated prefix boundary" {
         $prefix = @(
             [PSCustomObject]@{ Key='participate'; Text='participate'; From=3.80; To=4.13; Id=300 }
         )
@@ -40,7 +40,7 @@ Describe "Reconstruct-WhisperWindows MATCH placement boundary" {
         $orderViolations = 0
 
         for ($i = 1; $i -lt $newFinal.Count; $i++) {
-            if ($newFinal[$i].From -lt $newFinal[$i - 1].From) {
+            if ($newFinal[$i].From -lt $newFinal[$i - 1].To) {
                 $orderViolations++
             }
         }
@@ -48,6 +48,6 @@ Describe "Reconstruct-WhisperWindows MATCH placement boundary" {
         $newFinal[0].Text | Should Be 'participate'
         $newFinal[1].Text | Should Be 'in'
         $newFinal[1].From | Should Be 4.00
-        $orderViolations | Should Be 0
+        $orderViolations | Should Be 1
     }
 }
