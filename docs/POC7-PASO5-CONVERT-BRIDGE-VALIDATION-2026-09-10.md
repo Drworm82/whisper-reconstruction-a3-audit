@@ -154,4 +154,4 @@ Tampoco se modifica el resultado previamente validado del Paso 4.
 
 ## Commit de documentación de validación
 
-- pendiente en este cambio — registrar el PASS y la evidencia de la ejecución local.
+- `78d8e344698c060d28f4edc2d020a9f038217e1f` — Document POC7 Paso 5 Convert bridge validation
