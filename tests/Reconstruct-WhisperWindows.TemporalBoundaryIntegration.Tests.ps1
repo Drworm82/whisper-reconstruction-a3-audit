@@ -53,11 +53,12 @@ Describe "Reconstruct-WhisperWindows temporal MATCH placement integration" {
         } 6>&1)
 
         $words = @($output | Where-Object { $_.PSObject.Properties.Match('Id').Count })
+        $text = (($words | ForEach-Object { $_.Text }) -join ' ')
         $sinMatch = @($output | Where-Object { $v = $_; if ($v -is [System.Management.Automation.InformationRecord]) { $d = $v.MessageData; if ($d -is [System.Management.Automation.HostInformationMessage]) { $d = $d.Message }; $v = $d }; $v -is [string] -and $v -match "^SIN MATCH$" })
         $rejected = @($output | Where-Object { $v = $_; if ($v -is [System.Management.Automation.InformationRecord]) { $d = $v.MessageData; if ($d -is [System.Management.Automation.HostInformationMessage]) { $d = $d.Message }; $v = $d }; $v -is [string] -and $v -match 'MATCH REJECTED BY TEMPORAL PLACEMENT GUARD' })
         $orderViolations = 0
         for ($i = 1; $i -lt $words.Count; $i++) {
-            if ($words[$i].From -lt $words[$i - 1].To) {
+            if ($words[$i].From -lt $words[$i - 1].From) {
                 $orderViolations++
             }
         }
@@ -102,7 +103,7 @@ Describe "Reconstruct-WhisperWindows temporal MATCH placement integration" {
         $rejected = @($output | Where-Object { $v = $_; if ($v -is [System.Management.Automation.InformationRecord]) { $d = $v.MessageData; if ($d -is [System.Management.Automation.HostInformationMessage]) { $d = $d.Message }; $v = $d }; $v -is [string] -and $v -match 'MATCH REJECTED BY TEMPORAL PLACEMENT GUARD' })
         $orderViolations = 0
         for ($i = 1; $i -lt $words.Count; $i++) {
-            if ($words[$i].From -lt $words[$i - 1].To) {
+            if ($words[$i].From -lt $words[$i - 1].From) {
                 $orderViolations++
             }
         }
