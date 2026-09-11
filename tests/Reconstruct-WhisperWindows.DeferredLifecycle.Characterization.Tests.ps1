@@ -3,7 +3,7 @@ Describe "Reconstruct-WhisperWindows deferred word lifecycle characterization" {
     . "$PSScriptRoot/../src/Alignment/Find-WordOverlap.ps1"
     . "$PSScriptRoot/../src/Reconstruction/Reconstruct-WhisperWindows.ps1"
 
-    It "recovers a deferred occurrence exactly once when a later MATCH selects it" {
+    It "preserves the existing deferred-anchor recovery behavior" {
         $windows = @(
             [PSCustomObject]@{ Start=0.0; End=7.0; Tokens=@(
                 [PSCustomObject]@{ Text=' Uno'; From=0.0; To=1.0 }
