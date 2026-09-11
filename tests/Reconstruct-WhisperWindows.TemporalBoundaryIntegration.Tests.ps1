@@ -60,7 +60,7 @@ Describe "Reconstruct-WhisperWindows temporal MATCH placement integration" {
         $sinMatch = @($output | Where-Object { $_ -is [string] -and $_ -match '^SIN MATCH$' })
         $rejected = @($output | Where-Object { $_ -is [string] -and $_ -match 'MATCH REJECTED BY TEMPORAL PLACEMENT GUARD' })
 
-        $words.Count | Should Be 16
+        $words.Count | Should Be 15
         $text | Should Match 'And I would like to extend a very special shout out to the 84 participants'
         $sinMatch.Count | Should Be 0
         $rejected.Count | Should Be 0
@@ -96,8 +96,10 @@ Describe "Reconstruct-WhisperWindows temporal MATCH placement integration" {
 
         $words = @($output | Where-Object { $_.PSObject.Properties.Match('Id').Count })
         $sinMatch = @($output | Where-Object { $_ -is [string] -and $_ -match '^SIN MATCH$' })
+        $rejected = @($output | Where-Object { $_ -is [string] -and $_ -match 'MATCH REJECTED BY TEMPORAL PLACEMENT GUARD' })
 
         $sinMatch.Count | Should Be 1
+        $rejected.Count | Should Be 1
         $words.Count | Should Be 4
         $words[0].Text | Should Be 'participate'
     }
