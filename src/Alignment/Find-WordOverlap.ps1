@@ -231,15 +231,5 @@ function Find-WordOverlap {
         return $best
     }
 
-    $previousAnchor = $previousWords[$best.PreviousStart]
-    $currentAnchor  = $currentWords[$best.CurrentStart]
-
-    if ([double]$currentAnchor.From -lt [double]$previousAnchor.From) {
-        Write-Host "MATCH REJECTED BY TEMPORAL PLACEMENT GUARD"
-        Write-Host "Previous anchor: '$($previousAnchor.Text)' @ $($previousAnchor.From)s"
-        Write-Host "Current anchor:  '$($currentAnchor.Text)' @ $($currentAnchor.From)s"
-        return $null
-    }
-
     return $best
 }
