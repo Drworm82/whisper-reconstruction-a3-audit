@@ -97,10 +97,32 @@ for ($i = 1; $i -lt $windows.Count; $i++) {
     } else {
         Write-Host "MATCH CANDIDATE: FOUND"
         $match | Format-List | Out-String | Write-Host
+
+        $anchorPrevious = $prevOverlap[$match.PreviousStart]
+        $anchorCurrent = $currOverlap[$match.CurrentStart]
+        $anchorFromDifference = [math]::Abs($anchorPrevious.From - $anchorCurrent.From)
+        $anchorToDifference = [math]::Abs($anchorPrevious.To - $anchorCurrent.To)
+        $bandDuration = $overlapEnd - $overlapStart
+        $driftAllowance = [math]::Max(0.5, [math]::Min(1.5, $bandDuration * 0.2))
+        $chronologySafe = (
+            $anchorFromDifference -le $driftAllowance -and
+            $anchorToDifference -le $driftAllowance
+        )
+
+        Write-Host "MATCH TEMPORAL EVIDENCE"
+        Write-Host "Anchor From difference: $anchorFromDifference s"
+        Write-Host "Anchor To difference:   $anchorToDifference s"
+        Write-Host "Reconstruction drift allowance: $driftAllowance s"
+        Write-Host "Anchor timing within allowance: $chronologySafe"
+
+        if (-not $chronologySafe) {
+            Write-Host "TEMPORAL MATCH WARNING: el candidato lexical excede la tolerancia temporal de reconstruccion."
+        }
+
         Write-Host "Anchor previous:"
-        $prevOverlap[$match.PreviousStart] | Select-Object Id,Key,Text,From,To | Format-List | Out-String | Write-Host
+        $anchorPrevious | Select-Object Id,Key,Text,From,To | Format-List | Out-String | Write-Host
         Write-Host "Anchor current:"
-        $currOverlap[$match.CurrentStart] | Select-Object Id,Key,Text,From,To | Format-List | Out-String | Write-Host
+        $anchorCurrent | Select-Object Id,Key,Text,From,To | Format-List | Out-String | Write-Host
     }
 }
 
