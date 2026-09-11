@@ -2,7 +2,7 @@
 
 **Fecha:** 2026-09-11  
 **Rama:** `poc7-paso6-temporal-guard-clean`  
-**Estado:** implementado y validado.
+**Estado:** Paso 6 implementado y validado; auditoría separada de ciclo de vida de deferred en caracterización.
 
 ## 1. Contexto
 
@@ -66,7 +66,7 @@ Esto es importante porque en PowerShell asignar `$match = $null` después de hab
 
 Se preserva la lógica existente de `SIN MATCH`, incluidos deduplicación, aliases, diferidos y orden cronológico.
 
-## 4. Evidencia reproducible
+## 4. Evidencia reproducible del guard temporal
 
 La fixture diferida produjo los siguientes diagnósticos durante W1 → W2:
 
@@ -82,9 +82,9 @@ SIN MATCH
 
 La evidencia demuestra que el guard se ejecuta después de la recuperación del ancla diferida y que el MATCH inválido entra en la ruta existente de `SIN MATCH`.
 
-## 5. Pruebas de regresión
+## 5. Pruebas de regresión de Paso 6
 
-La cobertura validada en la rama `poc7-paso6-temporal-guard-clean` es:
+La cobertura validada antes de la auditoría de ciclo de vida de deferred fue:
 
 | Prueba | Resultado |
 |---|---:|
@@ -95,34 +95,45 @@ La cobertura validada en la rama `poc7-paso6-temporal-guard-clean` es:
 | `Reconstruct-WhisperWindows.DeferredAnchorTemporal.Tests.ps1` | 1/1 PASS |
 | **Total** | **9/9 PASS** |
 
-La prueba específica de ancla diferida verifica que:
+## 6. Auditoría separada: ciclo de vida de deferred
 
-- se recupera exactamente un ancla diferida;
-- se produce exactamente un rechazo temporal;
-- se entra exactamente una vez en `SIN MATCH`;
-- se conserva el resultado esperado de 9 palabras;
-- `Extra` recuperado conserva su posición inicial esperada;
-- la reconstrucción termina con `Ocho` como última palabra del fixture.
+Se introdujo una suite de caracterización independiente:
 
-## 6. Alcance arquitectónico
+```text
+tests/Reconstruct-WhisperWindows.DeferredLifecycle.Characterization.Tests.ps1
+```
 
-`Find-WordOverlap.ps1` permanece como capa de alineación léxica. No se reintroduce allí la regla temporal basada en el transcript acumulado.
+El primer caso reutiliza el patrón ya validado de ancla diferida y comprueba que la recuperación existente continúa produciendo exactamente una ocurrencia. Este caso pasó.
 
-`Reconstruct-WhisperWindows.ps1` es la capa que decide si el MATCH léxico es temporalmente válido frente al prefijo acumulado.
+El segundo caso caracteriza un **deferred orphan**: `X` aparece antes del ancla seleccionada, entra en `$deferredWordsByText`, y las ventanas posteriores avanzan a una zona temporal donde `X` no vuelve a ser candidato de recuperación. La expectativa de caracterización es que `X` permanezca en el transcript final.
 
-No se modifica como parte de esta resolución:
+Resultado ejecutado en PowerShell/Pester 3.4.0:
 
-- la geometría de ventanas;
-- `Build-WhisperWords`;
-- la lógica histórica de `SIN MATCH`;
-- la geometría de audio;
-- las reglas de `Convert`/`Build` existentes.
+```text
+Describing Reconstruct-WhisperWindows deferred word lifecycle characterization
+ [+] preserves the existing deferred-anchor recovery behavior 59ms
+ [-] characterizes that a deferred occurrence can remain without recovery 18ms
+   Expected: {1}
+   But was:  {0}
+Tests completed in 77ms
+Passed: 1 Failed: 1 Skipped: 0 Pending: 0 Inconclusive: 0
+```
 
-## 7. Geometría de producción y alcance de la fixture
+La primera prueba confirma que la recuperación existente sigue funcionando. La segunda reproduce de forma determinista que la ocurrencia `X` no aparece en el resultado final.
 
-La fixture de tres ventanas es deliberadamente sintética para alcanzar de forma controlada la rama de recuperación diferida. No debe interpretarse como una demostración de que el mismo patrón tenga alta frecuencia bajo la geometría normal de producción.
+Esto establece el hallazgo como **caracterización Pester reproducible de pérdida de un deferred no recuperado**, sin modificar todavía el código de producción.
 
-Con ventanas uniformes de duración `W` y paso `S`, la zona de overlap de la transición `i` es:
+## 7. Alcance y semántica aún abierta
+
+La existencia del orphan y su pérdida están demostradas por la fixture. Lo que todavía debe decidirse es la política semántica correcta para un deferred que llega al final de su vida útil sin recuperación.
+
+No se asume todavía que la solución correcta sea insertar automáticamente todos los deferred restantes en `finalWords`. Las alternativas a caracterizar incluyen una política explícita de finalización/expiración y sus efectos sobre duplicados, orden temporal y palabras que sean meramente candidatas a ancla.
+
+También queda por medir la frecuencia del fenómeno con capturas reales de POC7. La fixture sintética demuestra posibilidad y pérdida, no frecuencia de producción.
+
+## 8. Geometría de producción
+
+La fixture de tres ventanas es deliberadamente sintética para alcanzar de forma controlada la rama de recuperación y el caso orphan. Con ventanas uniformes de duración `W` y paso `S`, la zona de overlap de la transición `i` es:
 
 ```text
 zone_i = [i·S, (i-1)·S + W)
@@ -134,28 +145,20 @@ Para los parámetros documentados de producción (`W=5s`, `S=4s`):
 zone_i = [4i, 4i + 1)
 ```
 
-Las zonas consecutivas están separadas por 3 segundos. La alcanzabilidad de la rama diferida bajo esa geometría y las duraciones reales de tokens requiere una caracterización separada; no se afirma aquí que sea un caso frecuente en producción.
+Las zonas consecutivas están separadas por 3 segundos. La fixture demuestra pérdida cuando un deferred queda fuera de toda futura oportunidad de recuperación; la frecuencia real bajo la geometría de audio de producción permanece abierta.
 
-## 8. Cuestión separada: posibles diferidos huérfanos
+## 9. Estado actual
 
-El análisis sigue dejando una cuestión independiente: una palabra almacenada en `$deferredWordsByText` podría no volver a aparecer como ancla recuperable en una transición posterior bajo ciertas geometrías.
+Paso 6 queda **implementado y validado**.
 
-Esto **no forma parte de la resolución temporal de Paso 6** y queda como asunto separado para una auditoría posterior. No se introduce ninguna modificación para resolverlo en este paso.
-
-## 9. Estado final
-
-Paso 6 queda **implementado y validado** en `poc7-paso6-temporal-guard-clean`.
-
-La resolución mantiene la separación de responsabilidades:
+La auditoría posterior encontró un problema independiente de ciclo de vida:
 
 ```text
-Find-WordOverlap
-  = alineación léxica
-
-Reconstruct-WhisperWindows
-  = validación temporal contra transcript acumulado
+accepted MATCH
+  → words before selected anchor become deferred
+  → deferred is omitted from newFinal
+  → no later exact recovery
+  → occurrence disappears silently
 ```
 
-El guard temporal se ejecuta con el prefijo ya resuelto, incluyendo recuperación de anclas diferidas, y un MATCH rechazado entra por el único dispatch existente de `SIN MATCH`.
-
-La batería de regresión ejecutada después de la corrección finaliza en **9/9 PASS**.
+No se ha aplicado todavía una corrección de producción para este problema. El siguiente paso debe ser decidir y caracterizar la política correcta de finalización de deferred antes de modificar `Reconstruct-WhisperWindows.ps1`.
