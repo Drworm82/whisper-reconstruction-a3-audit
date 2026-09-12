@@ -2,7 +2,7 @@
 
 **Fecha:** 2026-09-12
 **Rama:** `poc7-paso6-temporal-guard-clean`
-**Estado:** Solución implementada y validada por el test de especificación, la batería de regresión temporal y los caracterizadores deferred existentes.
+**Estado:** Solución implementada y validada por el test de especificación, la batería de regresión temporal, los caracterizadores deferred existentes y la auditoría end-to-end con audio real completo.
 
 Este documento registra la corrección del descarte silencioso de palabras deferred al finalizar la reconstrucción. La evidencia previa del fenómeno está en `docs/POC7-PASO6-DEFERRED-ORPHAN-REAL-AUDIO-2026-09-11.md` y `docs/POC7-PASO6-DEFERRED-ORPHAN-CHARACTERIZATION.md`; la caracterización es histórica y su addendum indica cómo cambia el comportamiento esperado.
 
@@ -64,11 +64,13 @@ El flush es una **política de conservación/deduplicación al finalizar la reco
 ## 7. Riesgos residuales
 
 - Un deferred puede ser una **salida espuria del ASR** (error o alucinación del reconocimiento). El flush no establece por sí mismo que el contenido sea verdadero; solo decide conservarlo cuando no hay copia equivalente.
-- Los 23 deferred sin equivalente en el experimento real **pueden incluir errores de ASR**, por lo que su inserción no garantiza ganancia de calidad lingüística.
+- Los 23 deferred descartados como redundantes y los 21 insertados en el experimento real **pueden incluir errores de ASR**, por lo que la inserción no garantiza ganancia de calidad lingüística.
 - La geometría de la banda y la derivación de `driftAllowance` suponen ventanas solapadas con extremos disponibles en `$windows`; geometrías futuras distintas pueden requerir revisar la fórmula.
-- Las pruebas son sintéticas y de spec; la validación sobre audio real completo continúa pendiente.
+- `driftAllowance` de **0.8 s** es el valor derivado para la geometría real (banda de 4 s); es mayor que la heurística externa de ±0.6 s usada en la caracterización histórica, por lo que el flush puede deduplicar un poco más agresivamente que dicha heurística.
 
 ## 8. Validación realizada
+
+### 8.1 Tests de especificación y regresión
 
 Comandos de validación locales (Pester 3.4.0, PowerShell 5.1):
 
@@ -88,7 +90,53 @@ Comandos de validación locales (Pester 3.4.0, PowerShell 5.1):
   - `tests/Reconstruct-WhisperWindows.DeferredRecovery.Minimal.Tests.ps1` y `tests/Reconstruct-WhisperWindows.DeferredRecovery.Isolated.Tests.ps1` — idéntico patrón.
   - `tests/Reconstruct-WhisperWindows.Deferred.Orphan.{Characterization,Clean,Observed}.Tests.ps1` — fallan por queries con espacio (`Text -eq ' Y'`/`' A'`) que no matchean la salida recortada de `Build-WhisperWords`; misma conducta en HEAD.
 
-No se modificó ningún test existente. El audio real completo **no** se ejecutó en esta etapa.
+No se modificó ningún test existente.
+
+### 8.2 Validación end-to-end con audio real completo (auditoría CLI)
+
+Se ejecutó el pipeline completo contra los **121 JSONs de ASR cacheados** (whisper.cpp `base.en`/Vulkan, una invocación por ventana de 5 s, paso de 1 s) de la caracterización POC7, con el runner de auditoría fuera del repo (`%TEMP%\opencode\audit-flush-real.ps1`), comparando:
+
+- **OLD** = copia del archivo fuente sin el bloque de flush (comportamiento pre-solución).
+- **CUR/FUSH** = copia instrumentada con el flush, generada por un generador de trazas.
+
+Resultados (HEAD `0bacc37`):
+
+| Métrica | OLD | NEW (flush) |
+|---|---:|---:|
+| Ventanas usables / transiciones | 121 / 120 | 121 / 120 |
+| MATCH | 114 | 114 |
+| MATCH CS=0 / CS>0 | 78 / 36 | 78 / 36 |
+| SIN MATCH | 73 | 73 |
+| Rechazos por temporal placement guard | 67 | 67 |
+| Deferred creados | 44 | 44 |
+| Deferred recuperados | 0 | 0 |
+| Pendientes antes del flush | 44 | 44 |
+| Descarte por dedup | — | 23 |
+| Inserción por flush | — | 21 |
+| Final words | 379 | 400 (= 379 + 21) |
+| Duplicados de identidad | 0 | 0 |
+| Violaciones de orden cronológico | 0 | 0 |
+| Timestamps alterados | 0 | 0 |
+
+Checks de identidad (traza vs no-traza): **True** en OLD y en NEW (la instrumentación no altera la reconstrucción).
+
+Consistencia del flush: **44 pendientes == 23 descartados + 21 insertados** (creados − recuperados − pendientes = 0).
+
+Spec A–D sobre audio real:
+
+- **A** — no duplica redundantes: 23 descartados (sin copia duplicada añadida: `dupIdentityGroups` no aumenta).
+- **B** — cada huérfano conservado exactamente una vez: 21 insertados, 0 ids duplicados en el resultado.
+- **C** — orden cronológico: 0 violaciones (la secuencia de posiciones insertadas es estrictamente creciente 49→350).
+- **D** — timestamps preservados: 0 alterados.
+
+Cross-tab de los 44 originales con la heurística externa ±0.6 s:
+
+- Con representación (±0.6 s): 19 → los 19 descartados por dedup.
+- Sin representación (±0.6 s): 25 → 21 insertados y 4 descartados (dedup por tolerancia 0.8 s > 0.6 s).
+
+Anomalías: **ninguna**.
+
+Nota metodológica: el conteo MATCH=114 (CS=0:78, CS>0:36, SIN=73, guard=67) coincide exactamente con la caracterización documentada en `POC7-PASO6-DEFERRED-ORPHAN-REAL-AUDIO-2026-09-11.md`, lo que confirma que la entrada ASR reutilizada es bit-idéntica. Con la restauración del 2026-09-11 y el flush activo, el resultado final del audio real completo pasa la especificación A–D sin regresiones.
 
 ## 9. Archivos de la solución
 
