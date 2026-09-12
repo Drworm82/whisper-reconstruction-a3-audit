@@ -148,3 +148,15 @@ FINAL id=1-4 text='D' from=8 to=8.3
 ```
 
 The characterization test itself is intentionally not treated as a regression test for a future fix; it documents the current behavior and should remain separate from any eventual remediation test.
+
+## Addendum (2026-09-12): expected behavior has changed
+
+The sections above are **historical evidence** of the behavior before the end-of-run preservation fix. They document the control flow that silently discarded unrecovered deferred words.
+
+Starting with the end-of-run flush implemented in `Reconstruct-WhisperWindows.ps1` (see `docs/POC7-PASO6-DEFERRED-END-OF-RUN-PRESERVATION-2026-09-12.md`), the **expected behavior is now different**:
+
+- The fixture of this characterization (`W0: T0 X A B C`, `W1: Y A B C D`) now emits the orphaned deferred word `Y`, preserving exactly one representation in chronological position.
+- The resulting `finalWords` are therefore `T0 X A B C D Y` (previously `T0 X A B C D`).
+- The test file `tests/Reconstruct-WhisperWindows.DeferredOrphanCharacterization.Tests.ps1` and the orphan case of `tests/Reconstruct-WhisperWindows.DeferredLifecycle.Characterization.Tests.ps1` document this new expected outcome and pass.
+
+The historical sections remain intact and should be read as describing the pre-fix implementation.

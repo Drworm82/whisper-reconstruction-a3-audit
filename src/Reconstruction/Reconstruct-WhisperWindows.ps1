@@ -665,5 +665,88 @@ function Reconstruct-WhisperWindows {
         }
     }
 
+    # End-of-run flush: pending deferred occurrences are either proven
+    # redundant against the accumulated result or inserted in chronological
+    # position. The tolerance of each deferred is derived from the band
+    # geometry of the transition that created it (window index from Id).
+    $pending = @()
+
+    foreach ($bucket in @($deferredWordsByText.Values)) {
+        foreach ($occurrence in @($bucket)) {
+            if ([string]::IsNullOrWhiteSpace($occurrence.Text)) {
+                continue
+            }
+
+            if ([string]::IsNullOrEmpty($occurrence.Key)) {
+                continue
+            }
+
+            $pending += $occurrence
+        }
+    }
+
+    $pending = @($pending | Sort-Object -Property From, To, Id)
+
+    foreach ($deferred in $pending) {
+        $idParts = $deferred.Id -split '-'
+
+        if ($idParts.Count -lt 2) {
+            continue
+        }
+
+        $windowIndex = 0
+        if (-not [int]::TryParse($idParts[0], [ref]$windowIndex)) {
+            continue
+        }
+
+        if ($windowIndex -lt 1 -or $windowIndex -ge $windows.Count) {
+            continue
+        }
+
+        $bandDuration = $windows[$windowIndex - 1].End - $windows[$windowIndex].Start
+        $driftAllowance = [math]::Max(
+            0.5,
+            [math]::Min(1.5, $bandDuration * 0.2)
+        )
+
+        $deferredText = ($deferred.Text.ToLower()).Trim()
+        $hasEquivalent = $false
+
+        foreach ($existing in $finalWords) {
+            if ($deferredText -ne (($existing.Text.ToLower()).Trim())) {
+                continue
+            }
+
+            $fromDiff = [math]::Abs($deferred.From - $existing.From)
+            $toDiff   = [math]::Abs($deferred.To   - $existing.To)
+
+            if ($fromDiff -le $driftAllowance -and $toDiff -le $driftAllowance) {
+                $hasEquivalent = $true
+                break
+            }
+        }
+
+        if ($hasEquivalent) {
+            continue
+        }
+
+        $insertAt = $finalWords.Count
+
+        for ($idx = 0; $idx -lt $finalWords.Count; $idx++) {
+            if ($finalWords[$idx].From -gt $deferred.From) {
+                $insertAt = $idx
+                break
+            }
+        }
+
+        if ($insertAt -eq 0) {
+            $finalWords = @($deferred) + $finalWords
+        } elseif ($insertAt -eq $finalWords.Count) {
+            $finalWords = @($finalWords) + $deferred
+        } else {
+            $finalWords = @($finalWords[0..($insertAt - 1)]) + $deferred + @($finalWords[$insertAt..($finalWords.Count - 1)])
+        }
+    }
+
     return @($finalWords)
 }
