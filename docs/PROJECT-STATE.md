@@ -4,7 +4,7 @@
 
 **Repository:** `Drworm82/whisper-reconstruction-a3-audit`
 
-**Last documented update:** 2026-09-10
+**Last documented update:** 2026-09-14
 
 ## 1. Current objective
 
@@ -197,49 +197,15 @@ The later documentation update was rebased locally and the resulting code commit
 
 ## 9. Immediate next step
 
-**POC7 — Paso 7: real audio end-to-end validation after MATCH temporal guard integration**
+**POC7 — Paso 7: siguiente etapa de integración/validación end-to-end**
 
-POC7 Paso 1, Paso 2, Paso 3, Paso 4, Paso 5 y la corrección del Paso 6 están implementados y cuentan con validaciones locales específicas. La siguiente prueba debe ejercitar nuevamente el audio WASAPI real con el flujo completo y observar explícitamente `Convert -> Build -> Reconstruct` usando el guard temporal integrado.
+La validación de audio real end-to-end tras la integración del guard temporal de MATCH ya fue realizada durante la caracterización y el cierre de POC7 Paso 6 (ver sección 14). POC7 Paso 6 no requiere otra modificación algorítmica; su implementación quedó congelada en `0bacc37` y su estado documental actual es `69864d4`.
 
-La batería de regresión ejecutada antes de esta etapa obtuvo:
-
-- `Find-WordOverlap.TemporalPlacement.Tests.ps1`: **2/2 PASS**.
-- `Integration.Reconstruct-WhisperWindows.Tests.ps1`: **PASS**, 3/3 MATCH, 21 palabras, texto esperado exacto.
-- `Integration.RealisticTranscript.Tests.ps1`: **4/4 PASS**, 117 palabras, sin bloques repetidos y overlap de 10 palabras.
-- `Integration.Pipeline.Tests.ps1`: **PASS**, 138 palabras; la prueba tolera explícitamente transiciones `SIN MATCH` y valida continuidad de ejecución y resultado no vacío.
-
-### Paso 7 — alcance de la próxima ejecución
-
-Usar el harness existente:
-
-`AudioCapturePOC/EndToEndPOC/Program.cs`
-
-Configuración experimental preservada:
-
-- WASAPI Loopback.
-- 48 kHz, 2 canales, IEEE Float.
-- Ring buffer de 20 s.
-- Ventanas de 5 s.
-- Overlap de 1 s.
-- Paso de 4 s.
-- Cola de capacidad 3 con `DropOldest` como política experimental.
-- `whisper-server` persistente en `http://127.0.0.1:8080/inference`.
-- `verbose_json`.
-- Conversión mediante `Convert-WhisperServer.ps1`.
-- Offset global aplicado fuera del adapter usando `job.StartSeconds`.
-- `Build-WhisperWords`.
-- `Find-WordOverlap` integrado con guard temporal.
-- `Reconstruct-WhisperWindows` sobre las ventanas exitosas juntas.
-
-El harness actual ya implementa este flujo y guarda el JSON crudo por ventana para inspección posterior. fileciteturn267file0
-
-### Evidencia previa de Paso 5
-
-Existe una ejecución end-to-end anterior que validó 3 ventanas reales con HTTP 200, conversión correcta y reconstrucción de 30 palabras, con `0` IDs duplicados y orden temporal correcto. Esa evidencia corresponde a la ejecución documentada en `docs/POC7-PASO5-CONVERT-BRIDGE-VALIDATION-2026-09-10.md`. fileciteturn275file0
+Cualquier siguiente etapa debe partir de este estado congelado y documentado. El repositorio no documenta todavía un objetivo técnico concreto para Paso 7; esa definición queda pendiente de una decisión explícita.
 
 ### Limitaciones todavía abiertas
 
-La próxima ejecución tampoco establece por sí sola:
+Cualquier siguiente etapa tampoco establece por sí sola:
 
 - calidad lingüística suficiente para conversación arbitraria;
 - geometría final de producción;
@@ -367,3 +333,126 @@ Post-integration validation on the same real JSON produced:
 The detailed Step 6 record is `docs/POC7-PASO6-MATCH-GUARD-VALIDATION-2026-09-10.md`. fileciteturn268file0
 
 The next proof required is therefore the **live-audio end-to-end run with the integrated guard**, not another synthetic fixture or a second reconstruction algorithm change.
+
+## 14. POC7 — Paso 6: Deferred end-of-run preservation — STATUS: PASS / CLOSED
+
+**Fecha de cierre documental:** 2026-09-14
+
+El problema caracterizado era que los deferred creados durante un MATCH (palabras de la ventana actual que preceden al ancla seleccionado) podían quedar pendientes al terminar la última ventana y desaparecer al retornar de `Reconstruct-WhisperWindows`, descartándose silenciosamente sin aparecer en `finalWords`.
+
+### 14.1 Solución implementada
+
+La solución implementa un flush final condicional, ejecutado al terminar el recorrido de ventanas e inmediatamente antes de `return @($finalWords)`:
+
+1. Recorre los deferred pendientes de forma determinista (orden `From`, `To`, `Id`).
+2. Descarta entradas malformadas o sin texto útil (texto vacío o `Key` vacío).
+3. Deriva la tolerancia temporal de la geometría de la transición que creó el deferred, usando el índice de ventana presente en su `Id`.
+4. Para las ventanas reales usadas en la validación, la geometría es:
+
+   * ventana: 5 s;
+   * overlap: 4 s;
+   * `driftAllowance = max(0.5, min(1.5, 4 * 0.2)) = 0.8 s`.
+5. Si ya existe una representación equivalente por texto normalizado (minúsculas, sin espacios) y dentro de la tolerancia temporal en `From` y `To`, el deferred se descarta.
+6. Si no existe representación equivalente, se inserta en orden cronológico según su `From`.
+7. Se conservan sin modificación `Id`, `Text`, `From` y `To` de la ocurrencia insertada.
+8. El flush no reutiliza el temporal MATCH guard; su responsabilidad es preservación/deduplicación al final de la reconstrucción.
+
+### 14.2 Validación final sobre audio real
+
+La validación ejecutó exactamente la implementación de `0bacc37` (flush end-of-run) contra el audio `tests/fixtures/real-course-test.wav`, con la entrada ASR cacheada (whisper.cpp `base.en`/Vulkan, una invocación por ventana de 5 s con paso de 1 s) reutilizada byte-idéntica a la caracterización histórica de 2026-09-11. El runner de diagnóstico solo lee el repositorio; todos los artefactos quedaron en `%TEMP%\opencode\`.
+
+| Métrica                                   | Resultado |
+| ----------------------------------------- | --------: |
+| Ventanas usables                          |       121 |
+| Transiciones                              |       120 |
+| MATCH                                     |       114 |
+| MATCH con `CurrentStart > 0`              |        36 |
+| SIN MATCH                                 |        73 |
+| Rechazos por temporal guard               |        67 |
+| Deferred creados                          |        44 |
+| Deferred recuperados durante transiciones |         0 |
+| Pendientes antes del flush                |        44 |
+| Descartados por dedup final               |        23 |
+| Insertados por flush final                |        21 |
+| Palabras finales OLD                      |       379 |
+| Palabras finales NEW                      |       400 |
+| Duplicados por identidad OLD/NEW          |     0 / 0 |
+| IDs duplicados OLD/NEW                    |     0 / 0 |
+| Violaciones de orden temporal OLD/NEW     |     0 / 0 |
+| Timestamps alterados                      |         0 |
+| `pending = discarded + inserted`          |      TRUE |
+
+Consistencia contable del flush:
+
+`44 = 23 + 21`
+
+Incremento del resultado final producido exclusivamente por el flush:
+
+`400 = 379 + 21`
+
+### 14.3 Especificaciones A-D satisfechas en audio real
+
+- **A — No duplicación:** 23 deferred descartados por representación equivalente; 0 duplicados de identidad añadidos por el flush.
+- **B — Preservación de huérfanos:** 21 deferred insertados exactamente una vez; 0 IDs duplicados en el resultado final.
+- **C — Orden cronológico:** 0 violaciones de orden temporal en el resultado final.
+- **D — Preservación de timestamps:** 0 cambios en `From`/`To`, incluso para las palabras insertadas por el flush.
+
+### 14.4 Relación con la caracterización histórica
+
+El resultado real fue **23 descartados / 21 insertados** y NO debe confundirse con una predicción de la heurística histórica:
+
+- La caracterización de 2026-09-11 usaba `From-only ±0.6 s` y producía 21 con representación / 23 sin representación.
+- El runner posterior usa `From + To ±0.6 s` y produce 19 / 25.
+- El algoritmo implementado usa la tolerancia derivada de la geometría real de la ventana: **0.8 s**.
+
+Bajo esa tolerancia:
+
+- los 21 con representación histórica fueron descartados;
+- 21 de los 23 restantes fueron insertados;
+- 2 casos adicionales quedaron dentro de la tolerancia de 0.8 s y fueron descartados.
+
+Casos frontera:
+
+- `35-1 "a"` frente a `35-4 "a"`: `dFrom = 0.670 s`.
+- `98-0 "that's"` frente a `97-1 "that's"`: `dFrom = 0.800 s`, exactamente en el límite.
+
+No debe afirmarse que los 21 insertados sean palabras lingüísticamente verdaderas. Son entradas que la política de reconstrucción decidió conservar porque no encontró una representación equivalente dentro de la tolerancia definida.
+
+### 14.5 Falsa alarma del runner
+
+El mensaje:
+
+`inserted-position monotonicity: violations=2`
+
+no representa una violación del algoritmo. Fue un artefacto del diagnóstico: esa comprobación ordenaba los IDs lexicográficamente, de modo que `11-0` y `12-0` aparecen después de `114-1` bajo orden textual. La comprobación temporal real, procesando inserciones por `From`, `To`, `Id`, produjo:
+
+`orderViolations = 0`
+
+No debe modificarse producción por esta falsa alarma.
+
+### 14.6 Alcance y limitación residual
+
+**Paso 6 — STATUS: PASS / CLOSED.**
+
+La evidencia comprende:
+
+- especificación A-D (tests `Reconstruct-WhisperWindows.DeferredEndOfRun.Spec.Tests.ps1` y validación en audio real);
+- pruebas específicas de especificación y regresión temporal;
+- validación final con audio real completo (121 ventanas);
+- ausencia de regresión en las métricas de reconstrucción (MATCH, SIN MATCH y guard idénticos antes/después del flush);
+- preservación de timestamps;
+- deduplicación de representaciones equivalentes;
+- orden cronológico;
+- consistencia contable del flush (`44 = 23 + 21`, `400 = 379 + 21`).
+
+Limitación/riesgo residual:
+
+> La preservación de un deferred no implica que Whisper haya reconocido correctamente una palabra. La operación garantiza conservación y deduplicación conforme a la política algorítmica; la calidad lingüística de la salida de `base.en` sigue siendo un asunto separado.
+
+### 14.7 Historial
+
+- `0bacc37` — Implement deferred end-of-run preservation (implementación evaluada).
+- `69864d4` — documentación/estado actual del cierre de Paso 6 (HEAD durante la validación final).
+- Validación final: 121 ventanas, 44 deferred, 23 descartados, 21 insertados, 400 palabras finales, A-D OK.
+
+Nota: durante la validación final el HEAD real fue `69864d4`, descendiente documental de `0bacc37`. La implementación evaluada es byte-idéntica a `0bacc37` (`git diff 0bacc37 HEAD -- src/` vacío). El label "HEAD 0bacc37" del runner de diagnóstico es obsoleto y no representa el HEAD real.
