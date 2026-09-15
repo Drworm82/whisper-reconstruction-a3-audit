@@ -1,15 +1,17 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using NAudio.Wave;
 
-const int TestDurationSeconds = 15;
+const int TestDurationSeconds = 130;
 const double WindowDurationSeconds = 5.0;
 const double OverlapDurationSeconds = 1.0;
 const double StepSeconds = WindowDurationSeconds - OverlapDurationSeconds;
 const double RingBufferDurationSeconds = 20.0;
 const int QueueCapacity = 3;
 const string WhisperServerUrl = "http://127.0.0.1:8080/inference";
+const int RecordingQueueCapacity = 8192;
 
 Console.WriteLine("POC 7 - End-to-End Integration");
 Console.WriteLine("Paso 5 - whisper-server -> Convert -> Build -> Reconstruct");
@@ -32,6 +34,41 @@ var stateLock = new object();
 var captureStopped = false;
 long nextWindowStartFrame = 0;
 
+// Recording queue: bounded, single-producer (DataAvailable) / single-consumer (RecordingTask).
+// Capacity is sized generously above the expected chunk count for a >=130s session without being unbounded.
+var recordingQueue = new BlockingCollection<byte[]>(boundedCapacity: RecordingQueueCapacity);
+long recordingChunksProduced = 0;
+long recordingChunksWritten = 0;
+long recordingChunksDropped = 0;
+long recordingBytesProduced = 0;
+long recordingBytesWritten = 0;
+int recordingQueueMaxDepth = 0;
+Exception? recordingTaskException = null;
+
+void UpdateRecordingQueueMaxDepth(int depth)
+{
+    int current;
+    do
+    {
+        current = recordingQueueMaxDepth;
+        if (depth <= current) return;
+    } while (Interlocked.CompareExchange(ref recordingQueueMaxDepth, depth, current) != current);
+}
+
+void TryEnqueueRecording(byte[] chunk)
+{
+    Interlocked.Increment(ref recordingChunksProduced);
+    Interlocked.Add(ref recordingBytesProduced, chunk.LongLength);
+    if (recordingQueue.TryAdd(chunk))
+    {
+        UpdateRecordingQueueMaxDepth(recordingQueue.Count);
+    }
+    else
+    {
+        Interlocked.Increment(ref recordingChunksDropped);
+    }
+}
+
 var queue = new Queue<InferenceJob>();
 var queueLock = new object();
 var queueSignal = new SemaphoreSlim(0);
@@ -42,10 +79,16 @@ var maxQueueDepth = 0;
 var processedJobIndexes = new List<int>();
 var droppedJobIndexes = new List<int>();
 var successfulWindows = new List<SuccessfulWindow>();
+var timingSamples = new List<TimingSample>();
+var queueDepthSeries = new List<QueueDepthSample>();
+DateTime captureStartUtc = default;
 
 var repoRoot = Directory.GetParent(AppContext.BaseDirectory)!.Parent!.Parent!.Parent!.Parent!.Parent!.FullName;
 var rawJsonDirectory = Path.Combine(repoRoot, "AudioCapturePOC", "EndToEndPOC", "bin", "Debug", "net10.0", "raw-json");
 Directory.CreateDirectory(rawJsonDirectory);
+var auditAudioDirectory = Path.Combine(repoRoot, "AudioCapturePOC", "EndToEndPOC", "bin", "Debug", "net10.0", "audit-audio");
+Directory.CreateDirectory(auditAudioDirectory);
+var sessionWavPath = Path.Combine(auditAudioDirectory, "session.wav");
 
 Console.WriteLine($"Formato: {capture.WaveFormat}");
 Console.WriteLine($"Ring buffer: {RingBufferDurationSeconds:F1}s");
@@ -126,9 +169,12 @@ bool TryEnqueue(InferenceJob job)
             droppedJobs++;
             droppedJobIndexes.Add(dropped.WindowIndex);
         }
-        queue.Enqueue(job);
+
+        var queueEnterUtc = DateTime.UtcNow;
+        queue.Enqueue(job with { QueueEnterUtc = queueEnterUtc });
         depth = queue.Count;
         maxQueueDepth = Math.Max(maxQueueDepth, depth);
+        queueDepthSeries.Add(new QueueDepthSample(job.WindowIndex, depth, queueEnterUtc));
     }
 
     if (dropped != null)
@@ -191,7 +237,7 @@ $result | ConvertTo-Json -Depth 10
     return await RunPowerShellAsync(command);
 }
 
-async Task<InferenceResult> RunInferenceAsync(InferenceJob job)
+async Task<InferenceResult> RunInferenceAsync(InferenceJob job, DateTime inferenceStartUtc)
 {
     var stopwatch = Stopwatch.StartNew();
     var wavBytes = await BuildWavAsync(job.Audio);
@@ -206,12 +252,13 @@ async Task<InferenceResult> RunInferenceAsync(InferenceJob job)
 
     using var response = await httpClient.PostAsync(WhisperServerUrl, form);
     var responseText = await response.Content.ReadAsStringAsync();
+    var httpResponseUtc = DateTime.UtcNow;
     stopwatch.Stop();
 
     await File.WriteAllTextAsync(rawJsonPath, responseText, new UTF8Encoding(false));
 
     if (!response.IsSuccessStatusCode)
-        return new InferenceResult(false, (int)response.StatusCode, stopwatch.Elapsed.TotalMilliseconds, responseText.Length, 0, 0, rawJsonPath, null, $"HTTP {(int)response.StatusCode}");
+        return new InferenceResult(false, (int)response.StatusCode, stopwatch.Elapsed.TotalMilliseconds, responseText.Length, 0, 0, rawJsonPath, null, $"HTTP {(int)response.StatusCode}", inferenceStartUtc, httpResponseUtc, default);
 
     using var document = JsonDocument.Parse(responseText);
     var root = document.RootElement;
@@ -226,24 +273,54 @@ async Task<InferenceResult> RunInferenceAsync(InferenceJob job)
     var convertedJson = await ConvertWithPowerShellAsync(rawJsonPath);
     var convertedWindow = JsonSerializer.Deserialize<WhisperWindow>(convertedJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
     if (convertedWindow is null || convertedWindow.Tokens.Count == 0)
-        return new InferenceResult(false, 200, stopwatch.Elapsed.TotalMilliseconds, responseText.Length, segmentCount, wordCount, rawJsonPath, null, "Convert-WhisperServer produjo una ventana vacía o inválida.");
+        return new InferenceResult(false, 200, stopwatch.Elapsed.TotalMilliseconds, responseText.Length, segmentCount, wordCount, rawJsonPath, null, "Convert-WhisperServer produjo una ventana vacía o inválida.", inferenceStartUtc, httpResponseUtc, default);
+
+    var normalizedReadyUtc = DateTime.UtcNow;
 
     Console.WriteLine($"INFERENCE OK #{job.WindowIndex:D2} | HTTP 200 | {stopwatch.Elapsed.TotalMilliseconds:F1} ms | segments={segmentCount} | serverWords={wordCount} | convertedTokens={convertedWindow.Tokens.Count}");
     Console.WriteLine($"CONVERT PARSED #{job.WindowIndex:D2} | Start={convertedWindow.Start:F3}s | End={convertedWindow.End:F3}s | tokens={convertedWindow.Tokens.Count}");
 
-    return new InferenceResult(true, 200, stopwatch.Elapsed.TotalMilliseconds, responseText.Length, segmentCount, wordCount, rawJsonPath, convertedJson, null);
+    return new InferenceResult(true, 200, stopwatch.Elapsed.TotalMilliseconds, responseText.Length, segmentCount, wordCount, rawJsonPath, convertedJson, null, inferenceStartUtc, httpResponseUtc, normalizedReadyUtc);
 }
 
-capture.DataAvailable += (_, e) => WriteToRingBuffer(e.Buffer, e.BytesRecorded);
+capture.DataAvailable += (_, e) =>
+{
+    var recordingChunk = new byte[e.BytesRecorded];
+    Buffer.BlockCopy(e.Buffer, 0, recordingChunk, 0, e.BytesRecorded);
+    TryEnqueueRecording(recordingChunk);
+    WriteToRingBuffer(e.Buffer, e.BytesRecorded);
+};
 capture.RecordingStopped += (_, e) =>
 {
     lock (stateLock) captureStopped = true;
     queueSignal.Release();
+    recordingQueue.CompleteAdding();
     Console.WriteLine(e.Exception != null ? $"CAPTURE ERROR: {e.Exception}" : "Captura detenida.");
 };
 
+captureStartUtc = DateTime.UtcNow;
 capture.StartRecording();
 Console.WriteLine($"Capturando durante {TestDurationSeconds} segundos...");
+
+var recordingTask = Task.Run(() =>
+{
+    try
+    {
+        using var writer = new WaveFileWriter(sessionWavPath, capture.WaveFormat);
+        foreach (var chunk in recordingQueue.GetConsumingEnumerable())
+        {
+            writer.Write(chunk, 0, chunk.Length);
+            Interlocked.Increment(ref recordingChunksWritten);
+            Interlocked.Add(ref recordingBytesWritten, chunk.LongLength);
+        }
+        writer.Flush();
+    }
+    catch (Exception ex)
+    {
+        recordingTaskException = ex;
+        Console.WriteLine($"RECORDING TASK EXCEPTION: {ex}");
+    }
+});
 
 var consumerTask = Task.Run(async () =>
 {
@@ -259,8 +336,9 @@ var consumerTask = Task.Run(async () =>
         {
             try
             {
+                var inferenceStartUtc = DateTime.UtcNow;
                 Console.WriteLine($"INFERENCIA #{job.WindowIndex:D2} | {job.StartSeconds:F1}s -> {job.EndSeconds:F1}s");
-                var result = await RunInferenceAsync(job);
+                var result = await RunInferenceAsync(job, inferenceStartUtc);
                 lock (queueLock)
                 {
                     processedJobs++;
@@ -268,10 +346,21 @@ var consumerTask = Task.Run(async () =>
                 }
                 if (result.Success)
                 {
+                    var queueDelay = (inferenceStartUtc - job.QueueEnterUtc).TotalMilliseconds;
+                    var inferenceRtt = (result.HttpResponseUtc - inferenceStartUtc).TotalMilliseconds;
+                    var normalization = (result.NormalizedReadyUtc - result.HttpResponseUtc).TotalMilliseconds;
+                    var captureToText = (result.NormalizedReadyUtc - job.WindowReadyUtc).TotalMilliseconds;
+                    var audioEndUtc = captureStartUtc + TimeSpan.FromSeconds(job.EndSeconds);
+                    var windowAge = (result.NormalizedReadyUtc - audioEndUtc).TotalMilliseconds;
+
                     lock (queueLock)
                     {
+                        var entryDepth = queueDepthSeries.FirstOrDefault(x => x.WindowIndex == job.WindowIndex)?.Depth ?? 0;
                         successfulWindows.Add(new SuccessfulWindow(job.WindowIndex, job.StartSeconds, job.EndSeconds, result.RawJsonPath!, result.ConvertedJson!));
+                        timingSamples.Add(new TimingSample(job.WindowIndex, job.StartSeconds, job.EndSeconds, entryDepth, job.WindowReadyUtc, job.QueueEnterUtc, inferenceStartUtc, result.HttpResponseUtc, result.NormalizedReadyUtc, queueDelay, inferenceRtt, normalization, captureToText, windowAge));
                     }
+
+                    Console.WriteLine($"METRICAS #{job.WindowIndex:D2} | queueDelay={queueDelay:F1} | inferenceRTT={inferenceRtt:F1} | normalization={normalization:F1} | captureToText={captureToText:F1} | windowAge={windowAge:F1} (ms)");
                 }
                 else
                 {
@@ -320,8 +409,12 @@ var schedulerTask = Task.Run(async () =>
         {
             var startSeconds = nextWindowStartFrame / (double)sampleRate;
             var endSeconds = windowEndFrame / (double)sampleRate;
+            var windowReadyUtc = DateTime.UtcNow;
+            var windowWav = await BuildWavAsync(audio);
+            var windowPath = Path.Combine(auditAudioDirectory, $"window-{windowIndex:D2}.wav");
+            await File.WriteAllBytesAsync(windowPath, windowWav);
             Console.WriteLine($"VENTANA #{windowIndex}: {startSeconds:F3}s -> {endSeconds:F3}s | {audio.Length} bytes");
-            TryEnqueue(new InferenceJob(windowIndex, startSeconds, endSeconds, audio));
+            TryEnqueue(new InferenceJob(windowIndex, startSeconds, endSeconds, audio, windowReadyUtc, default));
             windowIndex++;
             nextWindowStartFrame += stepFrames;
             continue;
@@ -338,19 +431,70 @@ capture.StopRecording();
 Console.WriteLine("DESPUÉS DE STOP");
 await schedulerTask;
 await consumerTask;
+await recordingTask;
 
 int remainingJobs;
 lock (queueLock) remainingJobs = queue.Count;
 
 Console.WriteLine();
 Console.WriteLine("=== RESULTADO CAPTURA ===");
+long capturedFramesSnapshot;
+long capturedBytesSnapshot;
 lock (stateLock)
 {
+    capturedFramesSnapshot = totalFramesCaptured;
+    capturedBytesSnapshot = totalBytesCaptured;
     Console.WriteLine($"Frames capturados: {totalFramesCaptured}");
     Console.WriteLine($"Bytes capturados: {totalBytesCaptured}");
     Console.WriteLine($"Duración calculada: {totalFramesCaptured / (double)sampleRate:F3}s");
     Console.WriteLine($"Frames descartados del ring buffer: {droppedFramesFromRingBuffer}");
 }
+
+Console.WriteLine();
+Console.WriteLine("=== RESULTADO GRABACIÓN ===");
+var recordingExpectedBytes = capturedFramesSnapshot * bytesPerFrame;
+var recordingExpectedDuration = capturedFramesSnapshot / (double)sampleRate;
+var recordingActualDuration = bytesPerFrame > 0 ? (recordingBytesWritten / (double)bytesPerFrame) / sampleRate : 0.0;
+var recordingTaskOk = recordingTaskException == null;
+var recordingWavExists = File.Exists(sessionWavPath);
+var recordingWavHeaderValid = false;
+var recordingWavFormatMatches = false;
+if (recordingWavExists)
+{
+    try
+    {
+        using var recordingReader = new WaveFileReader(sessionWavPath);
+        recordingWavHeaderValid = true;
+        recordingWavFormatMatches = recordingReader.WaveFormat.SampleRate == capture.WaveFormat.SampleRate
+            && recordingReader.WaveFormat.Channels == capture.WaveFormat.Channels
+            && recordingReader.WaveFormat.BitsPerSample == capture.WaveFormat.BitsPerSample;
+    }
+    catch
+    {
+        recordingWavHeaderValid = false;
+    }
+}
+var recordingOk = recordingTaskOk
+    && recordingChunksDropped == 0
+    && recordingBytesWritten == capturedBytesSnapshot
+    && recordingWavExists
+    && recordingWavHeaderValid
+    && recordingWavFormatMatches;
+
+Console.WriteLine($"Frames capturados: {capturedFramesSnapshot}");
+Console.WriteLine($"Bytes capturados: {capturedBytesSnapshot}");
+Console.WriteLine($"Recording chunks producidos: {recordingChunksProduced}");
+Console.WriteLine($"Recording chunks escritos: {recordingChunksWritten}");
+Console.WriteLine($"Recording chunks descartados: {recordingChunksDropped}");
+Console.WriteLine($"Recording bytes producidos: {recordingBytesProduced}");
+Console.WriteLine($"Recording bytes escritos: {recordingBytesWritten}");
+Console.WriteLine($"Recording queue profundidad máxima: {recordingQueueMaxDepth}");
+Console.WriteLine($"Recording task: {(recordingTaskOk ? "OK" : "FAIL")}");
+Console.WriteLine($"Expected WAV bytes: {recordingExpectedBytes}");
+Console.WriteLine($"Actual WAV bytes: {recordingBytesWritten}");
+Console.WriteLine($"Duración esperada: {recordingExpectedDuration:F3}s");
+Console.WriteLine($"Duración WAV: {recordingActualDuration:F3}s");
+Console.WriteLine($"recordingOk: {(recordingOk ? "OK" : "ERROR")}");
 
 Console.WriteLine();
 Console.WriteLine("=== RESULTADO COLA ===");
@@ -401,7 +545,7 @@ for ($i = 0; $i -lt $paths.Count; $i++) {{
         End   = [double]$converted.End   + [double]$offsets[$i]
         Tokens = $globalTokens
     }}
-    $buildCounts += @((Build-WhisperWords $globalTokens -WindowIndex $i).Count)
+    $buildCounts += @(@(Build-WhisperWords $globalTokens -WindowIndex $i).Count)
 }}
 $reconstructed = @(Reconstruct-WhisperWindows $windows 6> $null)
 [PSCustomObject]@{{
@@ -430,16 +574,83 @@ $reconstructed = @(Reconstruct-WhisperWindows $windows 6> $null)
     Console.WriteLine($"TRANSICIONES evaluadas: {Math.Max(0, reconstruction.WindowCount - 1)}");
 }
 
-var captureOk = droppedFramesFromRingBuffer == 0;
+Console.WriteLine();
+Console.WriteLine("=== TIMING ===");
+
+Console.WriteLine($"Ventanas con timing completo: {timingSamples.Count}");
+Console.WriteLine($"Ventanas fallidas: {processedJobs - successfulWindows.Count}");
+
+static double Percentile(double[] sorted, double p)
+{
+    if (sorted.Length == 1) return sorted[0];
+    var rank = p * (sorted.Length - 1);
+    var lo = (int)Math.Floor(rank);
+    var hi = (int)Math.Ceiling(rank);
+    if (lo == hi) return sorted[lo];
+    return sorted[lo] + (rank - lo) * (sorted[hi] - sorted[lo]);
+}
+
+void PrintMetricRow(string name, double[] values)
+{
+    if (values.Length == 0)
+    {
+        Console.WriteLine($"{name}: count=0");
+        return;
+    }
+
+    Array.Sort(values);
+    Console.WriteLine($"{name}: count={values.Length} min={values[0]:F1} p50={Percentile(values, 0.5):F1} p95={Percentile(values, 0.95):F1} max={values[^1]:F1} (ms)");
+}
+
+PrintMetricRow("queueDelay", timingSamples.Select(x => x.QueueDelayMs).ToArray());
+PrintMetricRow("inferenceRTT", timingSamples.Select(x => x.InferenceRttMs).ToArray());
+PrintMetricRow("normalization", timingSamples.Select(x => x.NormalizationMs).ToArray());
+PrintMetricRow("captureToText", timingSamples.Select(x => x.CaptureToTextMs).ToArray());
+PrintMetricRow("windowAge", timingSamples.Select(x => x.WindowAgeMs).ToArray());
+
+Console.WriteLine();
+Console.WriteLine("=== METRICAS POR VENTANA ===");
+
+foreach (var s in timingSamples)
+{
+    Console.WriteLine($"#{s.WindowIndex:D2} | {s.StartSeconds:F3}-{s.EndSeconds:F3}s | depth={s.QueueDepth} | queueDelay={s.QueueDelayMs:F1} | inferenceRTT={s.InferenceRttMs:F1} | normalization={s.NormalizationMs:F1} | captureToText={s.CaptureToTextMs:F1} | windowAge={s.WindowAgeMs:F1} (ms)");
+}
+
+Console.WriteLine();
+Console.WriteLine("=== COLA (SERIE) ===");
+
+Console.WriteLine($"producedJobs={producedJobs} processedJobs={processedJobs} droppedJobs={droppedJobs} maxQueueDepth={maxQueueDepth} remainingJobs={remainingJobs}");
+
+if (queueDepthSeries.Count > 0)
+{
+    var firstDepth = queueDepthSeries[0].Depth;
+    var lastDepth = queueDepthSeries[^1].Depth;
+    Console.WriteLine($"primer depth={firstDepth} | último depth={lastDepth} | máximo depth={maxQueueDepth}");
+    Console.WriteLine($"serie: {string.Join(", ", queueDepthSeries.Select(x => $"{x.WindowIndex}:{x.Depth}"))}");
+
+    var n = Math.Min(3, queueDepthSeries.Count);
+    if (n > 0)
+    {
+        var firstAvg = queueDepthSeries.Take(n).Average(x => (double)x.Depth);
+        var lastAvg = queueDepthSeries.Skip(queueDepthSeries.Count - n).Average(x => (double)x.Depth);
+        Console.WriteLine($"promedio primeros {n}={firstAvg:F2} | promedio últimos {n}={lastAvg:F2}");
+    }
+}
+
+Console.WriteLine();
+
+var expectedWindows = (int)Math.Floor((TestDurationSeconds - WindowDurationSeconds) / StepSeconds) + 1;
+var captureOk = producedJobs == expectedWindows;
 var queueOk = accountingOk && capacityOk;
 var inferenceOk = successfulWindows.Count == producedJobs - droppedJobs;
-Console.WriteLine();
-Console.WriteLine($"POC 7 Paso 5 {(captureOk && queueOk && inferenceOk ? "PASS" : "FAIL")}.");
+Console.WriteLine($"POC 7 Paso 5 {(captureOk && queueOk && inferenceOk && recordingOk ? "PASS" : "FAIL")}.");
 
-record InferenceJob(int WindowIndex, double StartSeconds, double EndSeconds, byte[] Audio);
-record InferenceResult(bool Success, int StatusCode, double DurationMs, int ResponseBytes, int SegmentCount, int WordCount, string? RawJsonPath, string? ConvertedJson, string? Error);
+record InferenceJob(int WindowIndex, double StartSeconds, double EndSeconds, byte[] Audio, DateTime WindowReadyUtc, DateTime QueueEnterUtc);
+record InferenceResult(bool Success, int StatusCode, double DurationMs, int ResponseBytes, int SegmentCount, int WordCount, string? RawJsonPath, string? ConvertedJson, string? Error, DateTime InferenceStartUtc, DateTime HttpResponseUtc, DateTime NormalizedReadyUtc);
 record SuccessfulWindow(int WindowIndex, double StartSeconds, double EndSeconds, string RawJsonPath, string ConvertedJson);
 record WhisperWindow(double Start, double End, List<WhisperToken> Tokens);
 record WhisperToken(string Text, double From, double To);
 record ReconstructionSummary(int WindowCount, int[]? BuildWordCounts, int ReconstructedWordCount, ReconstructedWord[]? ReconstructedWords);
 record ReconstructedWord(string? Text, double From, double To, string? Id);
+record TimingSample(int WindowIndex, double StartSeconds, double EndSeconds, int QueueDepth, DateTime WindowReadyUtc, DateTime QueueEnterUtc, DateTime InferenceStartUtc, DateTime HttpResponseUtc, DateTime NormalizedReadyUtc, double QueueDelayMs, double InferenceRttMs, double NormalizationMs, double CaptureToTextMs, double WindowAgeMs);
+record QueueDepthSample(int WindowIndex, int Depth, DateTime Utc);
