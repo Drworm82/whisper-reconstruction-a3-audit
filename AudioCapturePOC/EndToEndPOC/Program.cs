@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -11,7 +10,6 @@ const double StepSeconds = WindowDurationSeconds - OverlapDurationSeconds;
 const double RingBufferDurationSeconds = 20.0;
 const int QueueCapacity = 3;
 const string WhisperServerUrl = "http://127.0.0.1:8080/inference";
-const int RecordingQueueCapacity = 8192;
 const double CaptureWatchdogTimeoutSeconds = 3.0;
 const int WatchdogPollMs = 250;
 const int MaxReconnectAttempts = 3;
@@ -19,7 +17,7 @@ const int ReconnectAttemptWaitMs = 1500;
 const int ReconnectObservationMs = 3000;
 
 Console.WriteLine("POC 7 - End-to-End Integration");
-Console.WriteLine("Paso 5 - whisper-server -> Convert -> Build -> Reconstruct");
+Console.WriteLine("Paso 10 - Transcripcion en vivo sin grabacion propia (OBS graba por separado)");
 Console.WriteLine();
 
 using var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
@@ -50,41 +48,6 @@ EventHandler<WaveInEventArgs>? currentDataAvailableHandler = null;
 EventHandler<StoppedEventArgs>? currentRecordingStoppedHandler = null;
 long nextWindowStartFrame = 0;
 
-// Recording queue: bounded, single-producer (DataAvailable) / single-consumer (RecordingTask).
-// Capacity is sized generously above the expected chunk count for a >=130s session without being unbounded.
-var recordingQueue = new BlockingCollection<byte[]>(boundedCapacity: RecordingQueueCapacity);
-long recordingChunksProduced = 0;
-long recordingChunksWritten = 0;
-long recordingChunksDropped = 0;
-long recordingBytesProduced = 0;
-long recordingBytesWritten = 0;
-int recordingQueueMaxDepth = 0;
-Exception? recordingTaskException = null;
-
-void UpdateRecordingQueueMaxDepth(int depth)
-{
-    int current;
-    do
-    {
-        current = recordingQueueMaxDepth;
-        if (depth <= current) return;
-    } while (Interlocked.CompareExchange(ref recordingQueueMaxDepth, depth, current) != current);
-}
-
-void TryEnqueueRecording(byte[] chunk)
-{
-    Interlocked.Increment(ref recordingChunksProduced);
-    Interlocked.Add(ref recordingBytesProduced, chunk.LongLength);
-    if (recordingQueue.TryAdd(chunk))
-    {
-        UpdateRecordingQueueMaxDepth(recordingQueue.Count);
-    }
-    else
-    {
-        Interlocked.Increment(ref recordingChunksDropped);
-    }
-}
-
 var queue = new Queue<InferenceJob>();
 var queueLock = new object();
 var queueSignal = new SemaphoreSlim(0);
@@ -104,7 +67,6 @@ var rawJsonDirectory = Path.Combine(repoRoot, "AudioCapturePOC", "EndToEndPOC", 
 Directory.CreateDirectory(rawJsonDirectory);
 var auditAudioDirectory = Path.Combine(repoRoot, "AudioCapturePOC", "EndToEndPOC", "bin", "Debug", "net10.0", "audit-audio");
 Directory.CreateDirectory(auditAudioDirectory);
-var sessionWavPath = Path.Combine(auditAudioDirectory, "session.wav");
 
 Console.WriteLine($"Formato: {captureWaveFormat}");
 Console.WriteLine($"Ring buffer: {RingBufferDurationSeconds:F1}s");
@@ -307,13 +269,6 @@ WasapiLoopbackCapture CreateLoopbackCapture()
 void SignalCaptureEnd()
 {
     queueSignal.Release();
-    try
-    {
-        recordingQueue.CompleteAdding();
-    }
-    catch (InvalidOperationException)
-    {
-    }
 }
 
 void AttachCaptureHandlers(WasapiLoopbackCapture c)
@@ -321,9 +276,6 @@ void AttachCaptureHandlers(WasapiLoopbackCapture c)
     currentDataAvailableHandler = (_, e) =>
     {
         Interlocked.Exchange(ref lastDataAvailableTick, Environment.TickCount64);
-        var recordingChunk = new byte[e.BytesRecorded];
-        Buffer.BlockCopy(e.Buffer, 0, recordingChunk, 0, e.BytesRecorded);
-        TryEnqueueRecording(recordingChunk);
         WriteToRingBuffer(e.Buffer, e.BytesRecorded);
     };
     currentRecordingStoppedHandler = (_, e) =>
@@ -506,26 +458,6 @@ Interlocked.Exchange(ref lastDataAvailableTick, Environment.TickCount64);
 capture.StartRecording();
 Console.WriteLine($"Capturando durante {TestDurationSeconds} segundos...");
 
-var recordingTask = Task.Run(() =>
-{
-    try
-    {
-        using var writer = new WaveFileWriter(sessionWavPath, captureWaveFormat);
-        foreach (var chunk in recordingQueue.GetConsumingEnumerable())
-        {
-            writer.Write(chunk, 0, chunk.Length);
-            Interlocked.Increment(ref recordingChunksWritten);
-            Interlocked.Add(ref recordingBytesWritten, chunk.LongLength);
-        }
-        writer.Flush();
-    }
-    catch (Exception ex)
-    {
-        recordingTaskException = ex;
-        Console.WriteLine($"RECORDING TASK EXCEPTION: {ex}");
-    }
-});
-
 var consumerTask = Task.Run(async () =>
 {
     while (true)
@@ -681,7 +613,6 @@ catch (Exception ex)
 Console.WriteLine("DESPUÉS DE STOP");
 await schedulerTask;
 await consumerTask;
-await recordingTask;
 await watchdogTask;
 
 int remainingJobs;
@@ -700,52 +631,6 @@ lock (stateLock)
     Console.WriteLine($"Duración calculada: {totalFramesCaptured / (double)sampleRate:F3}s");
     Console.WriteLine($"Frames descartados del ring buffer: {droppedFramesFromRingBuffer}");
 }
-
-Console.WriteLine();
-Console.WriteLine("=== RESULTADO GRABACIÓN ===");
-var recordingExpectedBytes = capturedFramesSnapshot * bytesPerFrame;
-var recordingExpectedDuration = capturedFramesSnapshot / (double)sampleRate;
-var recordingActualDuration = bytesPerFrame > 0 ? (recordingBytesWritten / (double)bytesPerFrame) / sampleRate : 0.0;
-var recordingTaskOk = recordingTaskException == null;
-var recordingWavExists = File.Exists(sessionWavPath);
-var recordingWavHeaderValid = false;
-var recordingWavFormatMatches = false;
-if (recordingWavExists)
-{
-    try
-    {
-        using var recordingReader = new WaveFileReader(sessionWavPath);
-        recordingWavHeaderValid = true;
-        recordingWavFormatMatches = recordingReader.WaveFormat.SampleRate == captureWaveFormat.SampleRate
-            && recordingReader.WaveFormat.Channels == captureWaveFormat.Channels
-            && recordingReader.WaveFormat.BitsPerSample == captureWaveFormat.BitsPerSample;
-    }
-    catch
-    {
-        recordingWavHeaderValid = false;
-    }
-}
-var recordingOk = recordingTaskOk
-    && recordingChunksDropped == 0
-    && recordingBytesWritten == capturedBytesSnapshot
-    && recordingWavExists
-    && recordingWavHeaderValid
-    && recordingWavFormatMatches;
-
-Console.WriteLine($"Frames capturados: {capturedFramesSnapshot}");
-Console.WriteLine($"Bytes capturados: {capturedBytesSnapshot}");
-Console.WriteLine($"Recording chunks producidos: {recordingChunksProduced}");
-Console.WriteLine($"Recording chunks escritos: {recordingChunksWritten}");
-Console.WriteLine($"Recording chunks descartados: {recordingChunksDropped}");
-Console.WriteLine($"Recording bytes producidos: {recordingBytesProduced}");
-Console.WriteLine($"Recording bytes escritos: {recordingBytesWritten}");
-Console.WriteLine($"Recording queue profundidad máxima: {recordingQueueMaxDepth}");
-Console.WriteLine($"Recording task: {(recordingTaskOk ? "OK" : "FAIL")}");
-Console.WriteLine($"Expected WAV bytes: {recordingExpectedBytes}");
-Console.WriteLine($"Actual WAV bytes: {recordingBytesWritten}");
-Console.WriteLine($"Duración esperada: {recordingExpectedDuration:F3}s");
-Console.WriteLine($"Duración WAV: {recordingActualDuration:F3}s");
-Console.WriteLine($"recordingOk: {(recordingOk ? "OK" : "ERROR")}");
 
 Console.WriteLine();
 Console.WriteLine("=== RESULTADO COLA ===");
@@ -894,7 +779,7 @@ var expectedWindows = (int)Math.Floor((TestDurationSeconds - WindowDurationSecon
 var captureContinuityOk = captureStopReason == CaptureStopReason.Normal && producedJobs == expectedWindows;
 var queueOk = accountingOk && capacityOk;
 var inferenceOk = successfulWindows.Count == producedJobs - droppedJobs;
-Console.WriteLine($"POC 7 Paso 5 {(captureContinuityOk && queueOk && inferenceOk && recordingOk ? "PASS" : "FAIL")}.");
+Console.WriteLine($"POC 7 Paso 10 {(captureContinuityOk && queueOk && inferenceOk ? "PASS" : "FAIL")}.");
 
 Console.WriteLine();
 Console.WriteLine("=== RESULTADO CAPTURA WASAPI ===");
