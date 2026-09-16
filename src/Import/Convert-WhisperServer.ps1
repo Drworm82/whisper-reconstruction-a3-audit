@@ -85,7 +85,8 @@ function Convert-WhisperServer {
             }
 
             if ($to -lt $from) {
-                throw "Inverted whisper-server word timing for '$text': $from > $to."
+                Write-Warning "Skipping word with inverted whisper-server timing for '$text': $from > $to."
+                continue
             }
 
             $tokens += [PSCustomObject]@{
