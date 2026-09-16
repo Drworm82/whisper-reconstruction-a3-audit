@@ -12,17 +12,23 @@ const double RingBufferDurationSeconds = 20.0;
 const int QueueCapacity = 3;
 const string WhisperServerUrl = "http://127.0.0.1:8080/inference";
 const int RecordingQueueCapacity = 8192;
+const double CaptureWatchdogTimeoutSeconds = 3.0;
+const int WatchdogPollMs = 250;
+const int MaxReconnectAttempts = 3;
+const int ReconnectAttemptWaitMs = 1500;
+const int ReconnectObservationMs = 3000;
 
 Console.WriteLine("POC 7 - End-to-End Integration");
 Console.WriteLine("Paso 5 - whisper-server -> Convert -> Build -> Reconstruct");
 Console.WriteLine();
 
-using var capture = new WasapiLoopbackCapture();
 using var httpClient = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
 
-var sampleRate = capture.WaveFormat.SampleRate;
-var channels = capture.WaveFormat.Channels;
-var bitsPerSample = capture.WaveFormat.BitsPerSample;
+var capture = CreateLoopbackCapture();
+var captureWaveFormat = capture.WaveFormat;
+var sampleRate = captureWaveFormat.SampleRate;
+var channels = captureWaveFormat.Channels;
+var bitsPerSample = captureWaveFormat.BitsPerSample;
 var bytesPerFrame = (bitsPerSample / 8) * channels;
 var ringBufferCapacityFrames = (long)(sampleRate * RingBufferDurationSeconds);
 var ringBuffer = new byte[checked((int)(ringBufferCapacityFrames * bytesPerFrame))];
@@ -32,6 +38,16 @@ long totalBytesCaptured = 0;
 long droppedFramesFromRingBuffer = 0;
 var stateLock = new object();
 var captureStopped = false;
+Exception? captureException = null;
+var captureStopRequested = false;
+var captureStopReason = CaptureStopReason.Normal;
+var watchdogSilentLossDetected = false;
+var reconnectInProgress = false;
+var reconnectAttempts = 0;
+var reconnectSucceeded = 0;
+long lastDataAvailableTick = 0;
+EventHandler<WaveInEventArgs>? currentDataAvailableHandler = null;
+EventHandler<StoppedEventArgs>? currentRecordingStoppedHandler = null;
 long nextWindowStartFrame = 0;
 
 // Recording queue: bounded, single-producer (DataAvailable) / single-consumer (RecordingTask).
@@ -90,7 +106,7 @@ var auditAudioDirectory = Path.Combine(repoRoot, "AudioCapturePOC", "EndToEndPOC
 Directory.CreateDirectory(auditAudioDirectory);
 var sessionWavPath = Path.Combine(auditAudioDirectory, "session.wav");
 
-Console.WriteLine($"Formato: {capture.WaveFormat}");
+Console.WriteLine($"Formato: {captureWaveFormat}");
 Console.WriteLine($"Ring buffer: {RingBufferDurationSeconds:F1}s");
 Console.WriteLine($"Ventana: {WindowDurationSeconds:F1}s | Solapamiento: {OverlapDurationSeconds:F1}s | Paso: {StepSeconds:F1}s");
 Console.WriteLine($"Cola: capacidad {QueueCapacity} | Overflow: DropOldest");
@@ -189,7 +205,7 @@ bool TryEnqueue(InferenceJob job)
 async Task<byte[]> BuildWavAsync(byte[] audio)
 {
     await using var stream = new MemoryStream();
-    using (var writer = new WaveFileWriter(stream, capture.WaveFormat))
+    using (var writer = new WaveFileWriter(stream, captureWaveFormat))
     {
         writer.Write(audio, 0, audio.Length);
         writer.Flush();
@@ -283,22 +299,210 @@ async Task<InferenceResult> RunInferenceAsync(InferenceJob job, DateTime inferen
     return new InferenceResult(true, 200, stopwatch.Elapsed.TotalMilliseconds, responseText.Length, segmentCount, wordCount, rawJsonPath, convertedJson, null, inferenceStartUtc, httpResponseUtc, normalizedReadyUtc);
 }
 
-capture.DataAvailable += (_, e) =>
+WasapiLoopbackCapture CreateLoopbackCapture()
 {
-    var recordingChunk = new byte[e.BytesRecorded];
-    Buffer.BlockCopy(e.Buffer, 0, recordingChunk, 0, e.BytesRecorded);
-    TryEnqueueRecording(recordingChunk);
-    WriteToRingBuffer(e.Buffer, e.BytesRecorded);
-};
-capture.RecordingStopped += (_, e) =>
+    return new WasapiLoopbackCapture();
+}
+
+void SignalCaptureEnd()
 {
-    lock (stateLock) captureStopped = true;
     queueSignal.Release();
-    recordingQueue.CompleteAdding();
-    Console.WriteLine(e.Exception != null ? $"CAPTURE ERROR: {e.Exception}" : "Captura detenida.");
-};
+    try
+    {
+        recordingQueue.CompleteAdding();
+    }
+    catch (InvalidOperationException)
+    {
+    }
+}
+
+void AttachCaptureHandlers(WasapiLoopbackCapture c)
+{
+    currentDataAvailableHandler = (_, e) =>
+    {
+        Interlocked.Exchange(ref lastDataAvailableTick, Environment.TickCount64);
+        var recordingChunk = new byte[e.BytesRecorded];
+        Buffer.BlockCopy(e.Buffer, 0, recordingChunk, 0, e.BytesRecorded);
+        TryEnqueueRecording(recordingChunk);
+        WriteToRingBuffer(e.Buffer, e.BytesRecorded);
+    };
+    currentRecordingStoppedHandler = (_, e) =>
+    {
+        lock (stateLock)
+        {
+            captureStopped = true;
+            captureException = e.Exception;
+            captureStopReason = captureStopRequested
+                ? CaptureStopReason.Normal
+                : CaptureStopReason.DeviceOrAudioSubsystemFailure;
+        }
+        SignalCaptureEnd();
+        if (e.Exception != null)
+            Console.WriteLine($"CAPTURE ERROR: {e.Exception}");
+        else if (captureStopReason == CaptureStopReason.DeviceOrAudioSubsystemFailure)
+            Console.WriteLine("CAPTURA DETENIDA INESPERADAMENTE: la captura WASAPI terminó sin haber sido solicitada por el programa.");
+        else
+            Console.WriteLine("Captura detenida.");
+    };
+    c.DataAvailable += currentDataAvailableHandler;
+    c.RecordingStopped += currentRecordingStoppedHandler;
+}
+
+void StopAndDetachCurrentCapture()
+{
+    try
+    {
+        if (currentDataAvailableHandler != null) capture.DataAvailable -= currentDataAvailableHandler;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"WATCHDOG detach DataAvailable: {ex.Message}");
+    }
+    try
+    {
+        if (currentRecordingStoppedHandler != null) capture.RecordingStopped -= currentRecordingStoppedHandler;
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"WATCHDOG detach RecordingStopped: {ex.Message}");
+    }
+    try
+    {
+        capture.StopRecording();
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"WATCHDOG StopRecording: {ex.Message}");
+    }
+    try
+    {
+        capture.Dispose();
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"WATCHDOG dispose: {ex.Message}");
+    }
+    currentDataAvailableHandler = null;
+    currentRecordingStoppedHandler = null;
+}
+
+async Task TryRecoverCaptureAsync()
+{
+    lock (stateLock) reconnectInProgress = true;
+    try
+    {
+        for (var attempt = 1; attempt <= MaxReconnectAttempts; attempt++)
+        {
+            bool stopped;
+            bool stopRequested;
+            lock (stateLock)
+            {
+                stopped = captureStopped;
+                stopRequested = captureStopRequested;
+            }
+            if (stopped) return;
+            if (stopRequested) return;
+
+            Interlocked.Increment(ref reconnectAttempts);
+            Console.WriteLine($"WATCHDOG RECONECTAR intento {attempt}/{MaxReconnectAttempts} | sin DataAvailable durante > {CaptureWatchdogTimeoutSeconds:F0} s");
+
+            StopAndDetachCurrentCapture();
+
+            WasapiLoopbackCapture? candidate = null;
+            try
+            {
+                candidate = CreateLoopbackCapture();
+                AttachCaptureHandlers(candidate);
+                candidate.StartRecording();
+                capture = candidate;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"WATCHDOG el intento {attempt} falló al crear/arrancar: {ex.Message}");
+                lock (stateLock)
+                {
+                    captureException ??= ex;
+                }
+                try { if (candidate != null) candidate.Dispose(); } catch { }
+                if (attempt < MaxReconnectAttempts)
+                {
+                    await Task.Delay(ReconnectAttemptWaitMs);
+                    continue;
+                }
+                break;
+            }
+
+            var attemptStartTick = Environment.TickCount64;
+            var recovered = false;
+            var handoffToNormalStop = false;
+            for (var observedMs = 0; observedMs < ReconnectObservationMs; observedMs += WatchdogPollMs)
+            {
+                await Task.Delay(WatchdogPollMs);
+                lock (stateLock)
+                {
+                    stopped = captureStopped;
+                    stopRequested = captureStopRequested;
+                }
+                if (stopped) break;
+                if (stopRequested)
+                {
+                    handoffToNormalStop = true;
+                    break;
+                }
+                if (Interlocked.Read(ref lastDataAvailableTick) > attemptStartTick)
+                {
+                    recovered = true;
+                    break;
+                }
+            }
+
+            if (recovered)
+            {
+                Interlocked.Increment(ref reconnectSucceeded);
+                Console.WriteLine("WATCHDOG RECONEXIÓN OK: flujo reanudado con una nueva instancia WasapiLoopbackCapture.");
+                return;
+            }
+
+            if (handoffToNormalStop)
+            {
+                Console.WriteLine("WATCHDOG abandona la reconexión: el programa solicitó la parada normal.");
+                return;
+            }
+
+            Console.WriteLine($"WATCHDOG el intento {attempt} no produjo datos en {ReconnectObservationMs} ms.");
+            try { candidate.DataAvailable -= currentDataAvailableHandler; } catch { }
+            try { candidate.RecordingStopped -= currentRecordingStoppedHandler; } catch { }
+            try { candidate.StopRecording(); } catch { }
+            try { candidate.Dispose(); } catch { }
+            lock (stateLock)
+            {
+                if (captureException == null)
+                    captureException = new InvalidOperationException($"La instancia recreada (intento {attempt}) no produjo DataAvailable.");
+            }
+            if (attempt < MaxReconnectAttempts)
+                await Task.Delay(ReconnectAttemptWaitMs);
+        }
+
+        lock (stateLock)
+        {
+            captureStopped = true;
+            captureStopReason = CaptureStopReason.DeviceOrAudioSubsystemFailure;
+            captureException ??= new InvalidOperationException("No se pudo recuperar la captura WASAPI tras la pérdida silenciosa.");
+        }
+        SignalCaptureEnd();
+        Console.WriteLine("WATCHDOG FALLO FINAL: no se pudo recuperar la captura; el resultado será FAIL de continuidad.");
+        StopAndDetachCurrentCapture();
+    }
+    finally
+    {
+        lock (stateLock) reconnectInProgress = false;
+    }
+}
+
+AttachCaptureHandlers(capture);
 
 captureStartUtc = DateTime.UtcNow;
+Interlocked.Exchange(ref lastDataAvailableTick, Environment.TickCount64);
 capture.StartRecording();
 Console.WriteLine($"Capturando durante {TestDurationSeconds} segundos...");
 
@@ -306,7 +510,7 @@ var recordingTask = Task.Run(() =>
 {
     try
     {
-        using var writer = new WaveFileWriter(sessionWavPath, capture.WaveFormat);
+        using var writer = new WaveFileWriter(sessionWavPath, captureWaveFormat);
         foreach (var chunk in recordingQueue.GetConsumingEnumerable())
         {
             writer.Write(chunk, 0, chunk.Length);
@@ -425,13 +629,60 @@ var schedulerTask = Task.Run(async () =>
     }
 });
 
+var watchdogTask = Task.Run(async () =>
+{
+    while (true)
+    {
+        await Task.Delay(WatchdogPollMs);
+        bool stopped;
+        bool stopRequested;
+        bool recovering;
+        lock (stateLock)
+        {
+            stopped = captureStopped;
+            stopRequested = captureStopRequested;
+            recovering = reconnectInProgress;
+        }
+        if (stopped) break;
+        if (stopRequested) continue;
+        if (recovering) continue;
+
+        if (Environment.TickCount64 - Interlocked.Read(ref lastDataAvailableTick) < CaptureWatchdogTimeoutSeconds * 1000) continue;
+
+        lock (stateLock)
+        {
+            watchdogSilentLossDetected = true;
+            captureStopReason = CaptureStopReason.DeviceOrAudioSubsystemFailure;
+        }
+        Console.WriteLine("WATCHDOG: sin DataAvailable durante el tiempo límite; posible pérdida silenciosa de la captura WASAPI.");
+        await TryRecoverCaptureAsync();
+    }
+});
+
 await Task.Delay(TimeSpan.FromSeconds(TestDurationSeconds));
 Console.WriteLine("ANTES DE STOP");
-capture.StopRecording();
+while (true)
+{
+    lock (stateLock)
+    {
+        captureStopRequested = true;
+        if (!reconnectInProgress) break;
+    }
+    await Task.Delay(50);
+}
+try
+{
+    capture.StopRecording();
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"STOP EXCEPTION: {ex.Message}");
+}
 Console.WriteLine("DESPUÉS DE STOP");
 await schedulerTask;
 await consumerTask;
 await recordingTask;
+await watchdogTask;
 
 int remainingJobs;
 lock (queueLock) remainingJobs = queue.Count;
@@ -465,9 +716,9 @@ if (recordingWavExists)
     {
         using var recordingReader = new WaveFileReader(sessionWavPath);
         recordingWavHeaderValid = true;
-        recordingWavFormatMatches = recordingReader.WaveFormat.SampleRate == capture.WaveFormat.SampleRate
-            && recordingReader.WaveFormat.Channels == capture.WaveFormat.Channels
-            && recordingReader.WaveFormat.BitsPerSample == capture.WaveFormat.BitsPerSample;
+        recordingWavFormatMatches = recordingReader.WaveFormat.SampleRate == captureWaveFormat.SampleRate
+            && recordingReader.WaveFormat.Channels == captureWaveFormat.Channels
+            && recordingReader.WaveFormat.BitsPerSample == captureWaveFormat.BitsPerSample;
     }
     catch
     {
@@ -640,10 +891,19 @@ if (queueDepthSeries.Count > 0)
 Console.WriteLine();
 
 var expectedWindows = (int)Math.Floor((TestDurationSeconds - WindowDurationSeconds) / StepSeconds) + 1;
-var captureOk = producedJobs == expectedWindows;
+var captureContinuityOk = captureStopReason == CaptureStopReason.Normal && producedJobs == expectedWindows;
 var queueOk = accountingOk && capacityOk;
 var inferenceOk = successfulWindows.Count == producedJobs - droppedJobs;
-Console.WriteLine($"POC 7 Paso 5 {(captureOk && queueOk && inferenceOk && recordingOk ? "PASS" : "FAIL")}.");
+Console.WriteLine($"POC 7 Paso 5 {(captureContinuityOk && queueOk && inferenceOk && recordingOk ? "PASS" : "FAIL")}.");
+
+Console.WriteLine();
+Console.WriteLine("=== RESULTADO CAPTURA WASAPI ===");
+Console.WriteLine($"Stop reason: {captureStopReason}");
+Console.WriteLine($"Capture exception: {(captureException != null ? captureException.ToString() : "null")}");
+Console.WriteLine($"Watchdog pérdida silenciosa detectada: {(watchdogSilentLossDetected ? "Sí" : "No")}");
+Console.WriteLine($"Reconexiones intentadas: {reconnectAttempts}");
+Console.WriteLine($"Reconexiones exitosas: {reconnectSucceeded}");
+Console.WriteLine($"Captura final activa: {(captureStopped ? "detenida" : "en curso")}");
 
 record InferenceJob(int WindowIndex, double StartSeconds, double EndSeconds, byte[] Audio, DateTime WindowReadyUtc, DateTime QueueEnterUtc);
 record InferenceResult(bool Success, int StatusCode, double DurationMs, int ResponseBytes, int SegmentCount, int WordCount, string? RawJsonPath, string? ConvertedJson, string? Error, DateTime InferenceStartUtc, DateTime HttpResponseUtc, DateTime NormalizedReadyUtc);
@@ -654,3 +914,9 @@ record ReconstructionSummary(int WindowCount, int[]? BuildWordCounts, int Recons
 record ReconstructedWord(string? Text, double From, double To, string? Id);
 record TimingSample(int WindowIndex, double StartSeconds, double EndSeconds, int QueueDepth, DateTime WindowReadyUtc, DateTime QueueEnterUtc, DateTime InferenceStartUtc, DateTime HttpResponseUtc, DateTime NormalizedReadyUtc, double QueueDelayMs, double InferenceRttMs, double NormalizationMs, double CaptureToTextMs, double WindowAgeMs);
 record QueueDepthSample(int WindowIndex, int Depth, DateTime Utc);
+
+enum CaptureStopReason
+{
+    Normal,
+    DeviceOrAudioSubsystemFailure
+}
