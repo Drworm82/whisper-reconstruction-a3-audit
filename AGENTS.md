@@ -50,7 +50,22 @@ This file is the persistent operating contract for any AI agent/assistant workin
 
 ## Current project invariants
 
-- Main working branch: `reconstruction-fixes`.
+- Main working branch: `poc7-paso6-temporal-guard-clean`.
+  - Corrected 2026-09-15: this file previously named `reconstruction-fixes` as the
+    main branch. Verified by commit date and by content diff that
+    `poc7-paso6-temporal-guard-clean` (last commit 2026-09-15) is newer than and
+    supersedes `reconstruction-fixes` (last commit 2026-09-11) and
+    `poc7-paso6-temporal-guard` (2026-09-10). `reconstruction-fixes` lacks the
+    temporal placement guard integrated into `Reconstruct-WhisperWindows.ps1`
+    and lacks the deferred end-of-run flush; both are present and validated on
+    `poc7-paso6-temporal-guard-clean`. The Issue 1/E1 posterior-match scenario
+    (present in `reconstruction-fixes`) was re-verified against
+    `poc7-paso6-temporal-guard-clean` via
+    `tests/Test-Issue1-E1-PosteriorMatch.Tests.ps1` and passes on this branch.
+  - `reconstruction-fixes`, `poc7-paso6-temporal-guard`, and the numerous
+    `issue6-*` / `reconstruction-fixes-poc6-doc*` branches on GitHub are
+    superseded/exploratory. Do not treat them as authoritative without an
+    explicit content comparison first.
 - Repository: `Drworm82/whisper-reconstruction-a3-audit`.
 - Existing reconstruction fixes have been validated by the project's regression suite; preserve them unless a new regression requires change.
 - `whisper.cpp` with Vulkan is the current ASR candidate for the AMD RX 6600 XT environment.

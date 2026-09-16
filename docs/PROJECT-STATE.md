@@ -1,10 +1,22 @@
 # Project State Checkpoint
 
-**Branch:** `reconstruction-fixes`
+**Branch:** `poc7-paso6-temporal-guard-clean`
 
 **Repository:** `Drworm82/whisper-reconstruction-a3-audit`
 
-**Last documented update:** 2026-09-14
+**Last documented update:** 2026-09-15
+
+> Corrección 2026-09-15: este documento indicaba `reconstruction-fixes` como
+> rama. Se verificó por fecha de commit real (GitHub) y por diff de contenido
+> que `poc7-paso6-temporal-guard-clean` (último commit 2026-09-15) es posterior
+> y superior a `reconstruction-fixes` (2026-09-11): esta última carece del
+> guard temporal reubicado a `Reconstruct-WhisperWindows.ps1` y del flush final
+> de palabras diferidas descritos en la sección 14. El escenario adicional de
+> `reconstruction-fixes` (MATCH posterior a un SIN MATCH) se re-verificó contra
+> `poc7-paso6-temporal-guard-clean` mediante
+> `tests/Test-Issue1-E1-PosteriorMatch.Tests.ps1` y sigue funcionando en esta
+> rama. Véase también `docs/MVP-STATE-INVENTORY-2026-09-14.md`, que ya
+> referenciaba la rama correcta.
 
 ## 1. Current objective
 
