@@ -214,6 +214,52 @@ $result | ConvertTo-Json -Depth 10
     return await RunPowerShellAsync(command);
 }
 
+async Task<ReconstructionSummary?> RunReconstructionAsync(IReadOnlyList<SuccessfulWindow> windowsSnapshot)
+{
+    if (windowsSnapshot.Count == 0) return null;
+
+    var ordered = windowsSnapshot.OrderBy(x => x.WindowIndex).ToArray();
+    var pathsLiteral = string.Join(",", ordered.Select(x => "'" + x.RawJsonPath.Replace("'", "''") + "'"));
+    var offsetsLiteral = string.Join(",", ordered.Select(x => x.StartSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+
+    var reconstructionCommand = $@"
+. .\src\Import\Convert-WhisperServer.ps1
+. .\src\Words\Build-WhisperWords.ps1
+. .\src\Alignment\Find-WordOverlap.ps1
+. .\src\Reconstruction\Reconstruct-WhisperWindows.ps1
+$paths = @({pathsLiteral})
+$offsets = @({offsetsLiteral})
+$windows = @()
+$buildCounts = @()
+for ($i = 0; $i -lt $paths.Count; $i++) {{
+    $converted = Convert-WhisperServer -Path $paths[$i]
+    $globalTokens = @($converted.Tokens | ForEach-Object {{
+        [PSCustomObject]@{{
+            Text = $_.Text
+            From = [double]$_.From + [double]$offsets[$i]
+            To   = [double]$_.To   + [double]$offsets[$i]
+        }}
+    }})
+    $windows += [PSCustomObject]@{{
+        Start = [double]$converted.Start + [double]$offsets[$i]
+        End   = [double]$converted.End   + [double]$offsets[$i]
+        Tokens = $globalTokens
+    }}
+    $buildCounts += @(@(Build-WhisperWords $globalTokens -WindowIndex $i).Count)
+}}
+$reconstructed = @(Reconstruct-WhisperWindows $windows 6> $null)
+[PSCustomObject]@{{
+    WindowCount = $windows.Count
+    BuildWordCounts = @($buildCounts)
+    ReconstructedWordCount = $reconstructed.Count
+    ReconstructedWords = @($reconstructed | ForEach-Object {{ [PSCustomObject]@{{ Text=$_.Text; From=$_.From; To=$_.To; Id=$_.Id }} }})
+}} | ConvertTo-Json -Depth 10
+";
+
+    var reconstructionJson = await RunPowerShellAsync(reconstructionCommand);
+    return JsonSerializer.Deserialize<ReconstructionSummary>(reconstructionJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+}
+
 async Task<InferenceResult> RunInferenceAsync(InferenceJob job, DateTime inferenceStartUtc)
 {
     var stopwatch = Stopwatch.StartNew();
@@ -590,6 +636,47 @@ var watchdogTask = Task.Run(async () =>
     }
 });
 
+var lastPrintedWordCount = 0;
+var lastReconstructedSnapshotCount = 0;
+
+var liveReconstructionTask = Task.Run(async () =>
+{
+    while (true)
+    {
+        bool stoppedNow;
+        lock (stateLock) stoppedNow = captureStopped;
+
+        List<SuccessfulWindow> snapshot;
+        lock (queueLock) snapshot = successfulWindows.ToList();
+
+        if (snapshot.Count > lastReconstructedSnapshotCount)
+        {
+            try
+            {
+                var summary = await RunReconstructionAsync(snapshot);
+                lastReconstructedSnapshotCount = snapshot.Count;
+                var words = summary?.ReconstructedWords ?? Array.Empty<ReconstructedWord>();
+                if (words.Length > lastPrintedWordCount)
+                {
+                    var newWords = words.Skip(lastPrintedWordCount).Select(w => w.Text);
+                    Console.WriteLine($"TRANSCRIPT+: {string.Join(" ", newWords)}");
+                    lastPrintedWordCount = words.Length;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"LIVE RECONSTRUCTION EXCEPTION: {ex.Message}");
+            }
+        }
+        else if (stoppedNow)
+        {
+            break;
+        }
+
+        await Task.Delay(1000);
+    }
+});
+
 await Task.Run(() => Console.ReadLine());
 Console.WriteLine("ANTES DE STOP");
 while (true)
@@ -613,6 +700,7 @@ Console.WriteLine("DESPUÉS DE STOP");
 await schedulerTask;
 await consumerTask;
 await watchdogTask;
+await liveReconstructionTask;
 
 int remainingJobs;
 lock (queueLock) remainingJobs = queue.Count;
@@ -653,46 +741,7 @@ if (successfulWindows.Count == 0)
 }
 else
 {
-    var ordered = successfulWindows.OrderBy(x => x.WindowIndex).ToArray();
-    var pathsLiteral = string.Join(",", ordered.Select(x => "'" + x.RawJsonPath.Replace("'", "''") + "'"));
-    var offsetsLiteral = string.Join(",", ordered.Select(x => x.StartSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)));
-
-    var reconstructionCommand = $@"
-. .\src\Import\Convert-WhisperServer.ps1
-. .\src\Words\Build-WhisperWords.ps1
-. .\src\Alignment\Find-WordOverlap.ps1
-. .\src\Reconstruction\Reconstruct-WhisperWindows.ps1
-$paths = @({pathsLiteral})
-$offsets = @({offsetsLiteral})
-$windows = @()
-$buildCounts = @()
-for ($i = 0; $i -lt $paths.Count; $i++) {{
-    $converted = Convert-WhisperServer -Path $paths[$i]
-    $globalTokens = @($converted.Tokens | ForEach-Object {{
-        [PSCustomObject]@{{
-            Text = $_.Text
-            From = [double]$_.From + [double]$offsets[$i]
-            To   = [double]$_.To   + [double]$offsets[$i]
-        }}
-    }})
-    $windows += [PSCustomObject]@{{
-        Start = [double]$converted.Start + [double]$offsets[$i]
-        End   = [double]$converted.End   + [double]$offsets[$i]
-        Tokens = $globalTokens
-    }}
-    $buildCounts += @(@(Build-WhisperWords $globalTokens -WindowIndex $i).Count)
-}}
-$reconstructed = @(Reconstruct-WhisperWindows $windows 6> $null)
-[PSCustomObject]@{{
-    WindowCount = $windows.Count
-    BuildWordCounts = @($buildCounts)
-    ReconstructedWordCount = $reconstructed.Count
-    ReconstructedWords = @($reconstructed | ForEach-Object {{ [PSCustomObject]@{{ Text=$_.Text; From=$_.From; To=$_.To; Id=$_.Id }} }})
-}} | ConvertTo-Json -Depth 10
-";
-
-    var reconstructionJson = await RunPowerShellAsync(reconstructionCommand);
-    var reconstruction = JsonSerializer.Deserialize<ReconstructionSummary>(reconstructionJson, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+    var reconstruction = await RunReconstructionAsync(successfulWindows);
     if (reconstruction == null) throw new InvalidOperationException("No se pudo interpretar el resultado de reconstrucción.");
 
     Console.WriteLine($"Windows convertidas: {reconstruction.WindowCount}");
