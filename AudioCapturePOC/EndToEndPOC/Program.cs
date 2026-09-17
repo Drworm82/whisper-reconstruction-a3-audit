@@ -15,6 +15,7 @@ const int MaxReconnectAttempts = 3;
 const int ReconnectAttemptWaitMs = 1500;
 const int ReconnectObservationMs = 3000;
 
+Console.OutputEncoding = Encoding.UTF8;
 Console.WriteLine("POC 7 - End-to-End Integration");
 Console.WriteLine("Paso 10 - Transcripcion en vivo sin grabacion propia (OBS graba por separado)");
 Console.WriteLine();
@@ -176,7 +177,8 @@ async Task<byte[]> BuildWavAsync(byte[] audio)
 
 async Task<string> RunPowerShellAsync(string command)
 {
-    var encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(command));
+    var fullCommand = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n" + command;
+    var encodedCommand = Convert.ToBase64String(Encoding.Unicode.GetBytes(fullCommand));
     var startInfo = new ProcessStartInfo
     {
         FileName = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
@@ -185,6 +187,8 @@ async Task<string> RunPowerShellAsync(string command)
         UseShellExecute = false,
         RedirectStandardOutput = true,
         RedirectStandardError = true,
+        StandardOutputEncoding = new UTF8Encoding(false),
+        StandardErrorEncoding = new UTF8Encoding(false),
         CreateNoWindow = true
     };
 
