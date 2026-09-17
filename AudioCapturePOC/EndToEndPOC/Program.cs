@@ -15,6 +15,8 @@ const int MaxReconnectAttempts = 3;
 const int ReconnectAttemptWaitMs = 1500;
 const int ReconnectObservationMs = 3000;
 
+var language = args.Length > 0 ? args[0].Trim().ToLowerInvariant() : "es";
+
 Console.OutputEncoding = Encoding.UTF8;
 Console.WriteLine("POC 7 - End-to-End Integration");
 Console.WriteLine("Paso 10 - Transcripcion en vivo sin grabacion propia (OBS graba por separado)");
@@ -73,6 +75,7 @@ Console.WriteLine($"Ring buffer: {RingBufferDurationSeconds:F1}s");
 Console.WriteLine($"Ventana: {WindowDurationSeconds:F1}s | Solapamiento: {OverlapDurationSeconds:F1}s | Paso: {StepSeconds:F1}s");
 Console.WriteLine($"Cola: capacidad {QueueCapacity} | Overflow: DropOldest");
 Console.WriteLine($"Whisper server: {WhisperServerUrl}");
+Console.WriteLine($"Idioma de transcripción: {language}");
 Console.WriteLine();
 
 void WriteToRingBuffer(byte[] source, int bytesRecorded)
@@ -275,6 +278,7 @@ async Task<InferenceResult> RunInferenceAsync(InferenceJob job, DateTime inferen
     fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("audio/wav");
     form.Add(fileContent, "file", $"window-{job.WindowIndex:D2}.wav");
     form.Add(new StringContent("0.0"), "temperature");
+    form.Add(new StringContent(language), "language");
     form.Add(new StringContent("verbose_json"), "response_format");
 
     using var response = await httpClient.PostAsync(WhisperServerUrl, form);
