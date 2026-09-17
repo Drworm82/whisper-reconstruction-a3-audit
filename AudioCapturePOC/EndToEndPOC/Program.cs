@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
+using System.Windows.Forms;
 using NAudio.Wave;
 
 const double WindowDurationSeconds = 5.0;
@@ -504,6 +506,23 @@ async Task TryRecoverCaptureAsync()
     }
 }
 
+LiveTranscriptWindow? liveWindow = null;
+using (var uiReady = new ManualResetEventSlim(false))
+{
+    var uiThread = new Thread(() =>
+    {
+        Application.SetHighDpiMode(HighDpiMode.SystemAware);
+        Application.EnableVisualStyles();
+        liveWindow = new LiveTranscriptWindow();
+        liveWindow.HandleCreated += (_, __) => uiReady.Set();
+        Application.Run(liveWindow);
+    });
+    uiThread.IsBackground = true;
+    uiThread.SetApartmentState(ApartmentState.STA);
+    uiThread.Start();
+    uiReady.Wait(TimeSpan.FromSeconds(5));
+}
+
 AttachCaptureHandlers(capture);
 
 captureStartUtc = DateTime.UtcNow;
@@ -666,8 +685,9 @@ var liveReconstructionTask = Task.Run(async () =>
                 var words = summary?.ReconstructedWords ?? Array.Empty<ReconstructedWord>();
                 if (words.Length > lastPrintedWordCount)
                 {
-                    var newWords = words.Skip(lastPrintedWordCount).Select(w => w.Text);
-                    Console.WriteLine($"TRANSCRIPT+: {string.Join(" ", newWords)}");
+                    var newWordsJoined = string.Join(" ", words.Skip(lastPrintedWordCount).Select(w => w.Text));
+                    Console.WriteLine($"TRANSCRIPT+: {newWordsJoined}");
+                    liveWindow?.AppendWords(newWordsJoined);
                     lastPrintedWordCount = words.Length;
                 }
             }
@@ -863,4 +883,40 @@ enum CaptureStopReason
 {
     Normal,
     DeviceOrAudioSubsystemFailure
+}
+
+sealed class LiveTranscriptWindow : Form
+{
+    private readonly TextBox _textBox;
+
+    public LiveTranscriptWindow()
+    {
+        Text = "Transcripción en vivo";
+        Width = 700;
+        Height = 500;
+        StartPosition = FormStartPosition.CenterScreen;
+        _textBox = new TextBox
+        {
+            Multiline = true,
+            ReadOnly = true,
+            ScrollBars = ScrollBars.Vertical,
+            Dock = DockStyle.Fill,
+            Font = new System.Drawing.Font("Segoe UI", 12F),
+            WordWrap = true
+        };
+        Controls.Add(_textBox);
+    }
+
+    public void AppendWords(string text)
+    {
+        if (IsDisposed) return;
+        if (_textBox.InvokeRequired)
+        {
+            try { _textBox.Invoke(new Action(() => AppendWords(text))); } catch (ObjectDisposedException) { }
+            return;
+        }
+        _textBox.AppendText((_textBox.TextLength > 0 ? " " : "") + text);
+        _textBox.SelectionStart = _textBox.TextLength;
+        _textBox.ScrollToCaret();
+    }
 }
