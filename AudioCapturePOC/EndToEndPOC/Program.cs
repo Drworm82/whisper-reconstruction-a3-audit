@@ -3,7 +3,6 @@ using System.Text;
 using System.Text.Json;
 using NAudio.Wave;
 
-const int TestDurationSeconds = 130;
 const double WindowDurationSeconds = 5.0;
 const double OverlapDurationSeconds = 1.0;
 const double StepSeconds = WindowDurationSeconds - OverlapDurationSeconds;
@@ -456,7 +455,7 @@ AttachCaptureHandlers(capture);
 captureStartUtc = DateTime.UtcNow;
 Interlocked.Exchange(ref lastDataAvailableTick, Environment.TickCount64);
 capture.StartRecording();
-Console.WriteLine($"Capturando durante {TestDurationSeconds} segundos...");
+Console.WriteLine("Capturando... presiona ENTER para detener.");
 
 var consumerTask = Task.Run(async () =>
 {
@@ -591,7 +590,7 @@ var watchdogTask = Task.Run(async () =>
     }
 });
 
-await Task.Delay(TimeSpan.FromSeconds(TestDurationSeconds));
+await Task.Run(() => Console.ReadLine());
 Console.WriteLine("ANTES DE STOP");
 while (true)
 {
@@ -775,7 +774,10 @@ if (queueDepthSeries.Count > 0)
 
 Console.WriteLine();
 
-var expectedWindows = (int)Math.Floor((TestDurationSeconds - WindowDurationSeconds) / StepSeconds) + 1;
+var observedDurationSeconds = capturedFramesSnapshot / (double)sampleRate;
+var expectedWindows = observedDurationSeconds >= WindowDurationSeconds
+    ? (int)Math.Floor((observedDurationSeconds - WindowDurationSeconds) / StepSeconds) + 1
+    : 0;
 var captureContinuityOk = captureStopReason == CaptureStopReason.Normal && producedJobs == expectedWindows;
 var queueOk = accountingOk && capacityOk;
 var inferenceOk = successfulWindows.Count == producedJobs - droppedJobs;
